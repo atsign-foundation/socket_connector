@@ -2,60 +2,114 @@ import 'dart:io';
 import 'package:tcp_rendezvous/src/handle_connection.dart';
 
 class SocketStream {
-  ServerSocket? senderServer;
-  ServerSocket? receiverServer;
-  Socket? senderSocket;
-  Socket? receiverSocket;
-  int senderCount = 0;
-  int receiverCount = 0;
+  ServerSocket? serverSocketA;
+  ServerSocket? serverSocketB;
+  Socket? socketA;
+  Socket? socketB;
+  int connectionsA = 0;
+  int connectionsB = 0;
 
-  SocketStream(this.receiverSocket, this.senderSocket, this.receiverCount,
-      this.senderCount, this.receiverServer, this.senderServer);
+  SocketStream(
+      this.socketB, this.socketA, this.connectionsB, this.connectionsA, this.serverSocketB, this.serverSocketA);
 
   int? senderPort() {
-    return senderServer?.port;
+    return serverSocketA?.port;
   }
 
   int? receierPort() {
-   return receiverServer?.port;
+    return serverSocketB?.port;
   }
 
- static Future<SocketStream> bind(
-    {InternetAddress? senderAddress,
-    InternetAddress? receiverAddress,
-    int? senderPort,
-    int? receiverPort,
-    bool? verbose}) async {
-  InternetAddress senderBindAddress;
-  InternetAddress receiverBindAddress;
-  senderPort ??= 0;
-  receiverPort ??= 0;
-  verbose ??= false;
-  senderAddress ??= InternetAddress.anyIPv4;
-  receiverAddress ??= InternetAddress.anyIPv4;
+  static Future<SocketStream> serverToServer(
+      {InternetAddress? serverAddressA,
+      InternetAddress? serverAddressB,
+      int? serverPortA,
+      int? serverPortB,
+      bool? verbose}) async {
+    InternetAddress senderBindAddress;
+    InternetAddress receiverBindAddress;
+    serverPortA ??= 0;
+    serverPortB ??= 0;
+    verbose ??= false;
+    serverAddressA ??= InternetAddress.anyIPv4;
+    serverAddressB ??= InternetAddress.anyIPv4;
 
-  senderBindAddress = senderAddress;
-  receiverBindAddress = senderAddress;
+    senderBindAddress = serverAddressA;
+    receiverBindAddress = serverAddressA;
 
-  //List<SocketStream> socketStreams;
-  SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
-  // bind the socket server to an address and port
-  socketStream.senderServer = await ServerSocket.bind(senderBindAddress, senderPort);
-  // bind the socket server to an address and port
-  socketStream.receiverServer = await ServerSocket.bind(receiverBindAddress, receiverPort);
+    //List<SocketStream> socketStreams;
+    SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
+    // bind the socket server to an address and port
+    socketStream.serverSocketA = await ServerSocket.bind(senderBindAddress, serverPortA);
+    // bind the socket server to an address and port
+    socketStream.serverSocketB = await ServerSocket.bind(receiverBindAddress, serverPortB);
 
-  // listen for sender connections to the server
-  socketStream.senderServer?.listen((
-    sender,
-  ) {
-    handleConnection(sender, true, socketStream, verbose!);
-  });
+    // listen for sender connections to the server
+    socketStream.serverSocketA?.listen((
+      sender,
+    ) {
+      handleConnection(sender, true, socketStream, verbose!);
+    });
 
-  // listen for receiver connections to the server
-  socketStream.receiverServer?.listen((receiver) {
-    handleConnection(receiver, false, socketStream, verbose!);
-  });
-  return (socketStream);
-}
+    // listen for receiver connections to the server
+    socketStream.serverSocketB?.listen((receiver) {
+      handleConnection(receiver, false, socketStream, verbose!);
+    });
+    return (socketStream);
+  }
 
+  static Future<SocketStream> socketToServer(
+      {required InternetAddress socketAddress,
+      required int socketPort,
+      InternetAddress? serverAddress,
+      int? receiverPort,
+      bool? verbose}) async {
+    InternetAddress receiverBindAddress;
+    receiverPort ??= 0;
+    verbose ??= false;
+
+    serverAddress ??= InternetAddress.anyIPv4;
+    receiverBindAddress = serverAddress;
+
+    SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
+
+    // connect socket server to an address and port
+    socketStream.socketA = await Socket.connect(socketAddress, socketPort);
+
+    // bind the socket server to an address and port
+    socketStream.serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
+
+    // listen for sender connections to the server
+    handleConnection(socketStream.socketA!, true, socketStream, verbose);
+    // listen for receiver connections to the server
+    socketStream.serverSocketB?.listen((receiver) {
+      handleConnection(receiver, false, socketStream, verbose!);
+    });
+    return (socketStream);
+  }
+
+  static Future<SocketStream> socketToSocket(
+      {required InternetAddress socketAddressA,
+      required int socketPortA,
+      required InternetAddress socketAddressB,
+      required int socketPortB,
+      bool? verbose}) async {
+  
+    verbose ??= false;
+
+    SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
+
+    // connect socket server to an address and port
+    socketStream.socketA = await Socket.connect(socketAddressA, socketPortA);
+
+    // connect socket server to an address and port
+    socketStream.socketB = await Socket.connect(socketAddressB, socketPortB);
+
+    // listen for sender connections to the server
+    handleConnection(socketStream.socketA!, true, socketStream, verbose);
+    // listen for receiver connections to the server
+    handleConnection(socketStream.socketB!, false, socketStream, verbose);
+ 
+    return (socketStream);
+  }
 }

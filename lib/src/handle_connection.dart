@@ -3,28 +3,28 @@ import 'package:tcp_rendezvous/src/socket_stream.dart';
 
 import 'package:chalkdart/chalk.dart';
 
-void handleConnection(Socket client, bool sender, SocketStream socketStream, bool verbose) {
+void handleConnection(Socket socket, bool sender, SocketStream socketStream, bool verbose) {
   List<int> buffer = [];
   if (sender) {
-    socketStream.senderCount++;
+    socketStream.connectionsA++;
     // If another connection is detected close it
-    if (socketStream.senderCount > 1) {
-      client.destroy();
+    if (socketStream.connectionsA > 1) {
+      socket.destroy();
     } else {
-      socketStream.senderSocket = client;
+      socketStream.socketA = socket;
     }
   } else {
-    socketStream.receiverCount++;
+    socketStream.connectionsB++;
     // If another connection is detected close it
-    if (socketStream.receiverCount > 1) {
-      client.destroy();
+    if (socketStream.connectionsB > 1) {
+      socket.destroy();
     } else {
-      socketStream.receiverSocket = client;
+      socketStream.socketB = socket;
     }
   }
 
   // listen for events from the client
-  client.listen(
+  socket.listen(
     // handle data from the client
     (List<int> data) async {
       final message = String.fromCharCodes(data);
@@ -32,12 +32,12 @@ void handleConnection(Socket client, bool sender, SocketStream socketStream, boo
         if (verbose) {
           print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[^A-Za-z0-9 -/]'), '*')}\n'));
         }
-        if (socketStream.receiverSocket == null) {
+        if (socketStream.socketB == null) {
           buffer = (buffer + data);
         } else {
           data = (buffer + data);
           try {
-            socketStream.receiverSocket?.add(data);
+            socketStream.socketB?.add(data);
           } catch (e) {
             stderr.write('Receiver Socket error : ${e.toString()}');
           }
@@ -47,12 +47,12 @@ void handleConnection(Socket client, bool sender, SocketStream socketStream, boo
         if (verbose) {
           print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[^A-Za-z0-9 -/]'), '*')}\n'));
         }
-        if (socketStream.senderSocket == null) {
+        if (socketStream.socketA == null) {
           buffer = (buffer + data);
         } else {
           data = (buffer + data);
           try {
-            socketStream.senderSocket?.add(data);
+            socketStream.socketA?.add(data);
           } catch (e) {
             stderr.write('Receiver Socket error : ${e.toString()}');
           }
@@ -64,34 +64,34 @@ void handleConnection(Socket client, bool sender, SocketStream socketStream, boo
     // handle errors
     onError: (error) {
       stderr.writeln('Error: $error');
-      client.destroy();
+      socket.destroy();
       if (sender) {
-        socketStream.senderCount--;
+        socketStream.connectionsA--;
       } else {
-        client.destroy();
-        socketStream.receiverCount--;
+        socket.destroy();
+        socketStream.connectionsB--;
       }
     },
 
     // handle the client closing the connection
     onDone: () {
       if (sender) {
-        socketStream.senderCount--;
-        if (socketStream.senderCount == 0) {
-          socketStream.receiverSocket?.destroy();
-          socketStream.receiverSocket = null;
-          socketStream.senderSocket = null;
-          socketStream.senderServer?.close();
-          socketStream.receiverServer?.close();
+        socketStream.connectionsA--;
+        if (socketStream.connectionsA == 0) {
+          socketStream.socketB?.destroy();
+          socketStream.socketB = null;
+          socketStream.socketA = null;
+          socketStream.serverSocketA?.close();
+          socketStream.serverSocketB?.close();
         }
       } else {
-        socketStream.receiverCount--;
-        if (socketStream.receiverCount == 0) {
-          socketStream.senderSocket?.destroy();
-          socketStream.receiverSocket = null;
-          socketStream.senderSocket = null;
-          socketStream.senderServer?.close();
-          socketStream.receiverServer?.close();
+        socketStream.connectionsB--;
+        if (socketStream.connectionsB == 0) {
+          socketStream.socketA?.destroy();
+          socketStream.socketB = null;
+          socketStream.socketA = null;
+          socketStream.serverSocketA?.close();
+          socketStream.serverSocketB?.close();
         }
       }
     },

@@ -11,7 +11,7 @@ void main() {
     String senderBuffer = "sender";
     String receiverBuffer = "receiver";
     setUp(() async {
-      socketStream = await SocketStream.bind(senderPort: 0, receiverPort: 0);
+      socketStream = await SocketStream.serverToServer(serverPortA: 0, serverPortB: 0);
       senderPort = socketStream.senderPort();
       receiverPort = socketStream.receierPort();
     });
@@ -25,8 +25,8 @@ void main() {
     });
 
     test('Test connection works', () async {
-      Socket? socketSender = await Socket.connect('localhost', socketStream.senderServer!.port);
-      Socket? socketReceiver = await Socket.connect('localhost', socketStream.receiverServer!.port);
+      Socket? socketSender = await Socket.connect('localhost', socketStream.serverSocketA!.port);
+      Socket? socketReceiver = await Socket.connect('localhost', socketStream.serverSocketB!.port);
 
       socketSender.listen((List<int> data) {
         senderBuffer = String.fromCharCodes(data);
