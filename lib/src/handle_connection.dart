@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:tcp_rendezvous/src/model/socket_stream.dart';
+import 'package:tcp_rendezvous/src/socket_stream.dart';
 
 import 'package:chalkdart/chalk.dart';
 

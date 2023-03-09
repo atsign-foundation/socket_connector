@@ -1,5 +1,4 @@
-library at_stream_spike.dart;
+library tcp_rendezvous.dart;
 
-export 'package:tcp_rendezvous/src/model/socket_stream.dart';
-export 'package:tcp_rendezvous/src/bind_socket_stream.dart';
+export 'package:tcp_rendezvous/src/socket_stream.dart';
 

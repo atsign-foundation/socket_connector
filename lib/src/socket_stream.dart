@@ -1,8 +1,26 @@
 import 'dart:io';
-import 'package:tcp_rendezvous/src/model/socket_stream.dart';
 import 'package:tcp_rendezvous/src/handle_connection.dart';
 
-Future<SocketStream> bindSocketStream(
+class SocketStream {
+  ServerSocket? senderServer;
+  ServerSocket? receiverServer;
+  Socket? senderSocket;
+  Socket? receiverSocket;
+  int senderCount = 0;
+  int receiverCount = 0;
+
+  SocketStream(this.receiverSocket, this.senderSocket, this.receiverCount,
+      this.senderCount, this.receiverServer, this.senderServer);
+
+  int? senderPort() {
+    return senderServer?.port;
+  }
+
+  int? receierPort() {
+   return receiverServer?.port;
+  }
+
+ static Future<SocketStream> bind(
     {InternetAddress? senderAddress,
     InternetAddress? receiverAddress,
     int? senderPort,
@@ -38,4 +56,6 @@ Future<SocketStream> bindSocketStream(
     handleConnection(receiver, false, socketStream, verbose!);
   });
   return (socketStream);
+}
+
 }

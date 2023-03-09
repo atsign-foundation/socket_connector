@@ -11,7 +11,7 @@ void main() {
     String senderBuffer = "sender";
     String receiverBuffer = "receiver";
     setUp(() async {
-      socketStream = await bindSocketStream(senderPort: 0, receiverPort: 0);
+      socketStream = await SocketStream.bind(senderPort: 0, receiverPort: 0);
       senderPort = socketStream.senderPort();
       receiverPort = socketStream.receierPort();
     });
