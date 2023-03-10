@@ -16,7 +16,7 @@ class SocketStream {
     return serverSocketA?.port;
   }
 
-  int? receierPort() {
+  int? receiverPort() {
     return serverSocketB?.port;
   }
 

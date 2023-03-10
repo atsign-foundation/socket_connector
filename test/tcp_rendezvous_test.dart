@@ -13,14 +13,14 @@ void main() {
     late SocketStream socketStreamServerToServer;
     setUp(() async {
       //Set up for serverToServer
-      socketStream = await SocketStream.serverToServer(serverPortA: 0, serverPortB: 0);
+      socketStream = await SocketStream.serverToServer(serverPortA: 0, serverPortB: 0, verbose: true);
       senderPort = socketStream.senderPort();
-      receiverPort = socketStream.receierPort();
+      receiverPort = socketStream.receiverPort();
 
       //Setup for socketToServer
       serverSocketTest = await ServerSocket.bind('127.0.0.1', 0);
       socketStreamServerToServer = await SocketStream.socketToServer(
-          socketAddress: InternetAddress('127.0.0.1'), socketPort: serverSocketTest.port);
+          socketAddress: InternetAddress('127.0.0.1'), socketPort: serverSocketTest.port, verbose: true);
     });
 
     test('Test Sender Port bound', () {
@@ -34,8 +34,8 @@ void main() {
     test('Test ServerToServer', () async {
       String senderBuffer = "sender";
       String receiverBuffer = "receiver";
-      Socket? socketSender = await Socket.connect('localhost', socketStream.senderPort()!);
-      Socket? socketReceiver = await Socket.connect('localhost', socketStream.receierPort()!);
+      Socket? socketReceiver = await Socket.connect('localhost', socketStream.senderPort()!);
+      Socket? socketSender = await Socket.connect('localhost', socketStream.receiverPort()!);
 
       socketSender.listen((List<int> data) {
         senderBuffer = String.fromCharCodes(data);
@@ -57,7 +57,7 @@ void main() {
       String receiverBuffer = "receiver";
 
       late Socket receiverSocket;
-      Socket? senderSocket = await Socket.connect('localhost', socketStreamServerToServer.receierPort()!);
+      Socket? senderSocket = await Socket.connect('localhost', socketStreamServerToServer.receiverPort()!);
 
       senderSocket.listen((List<int> data) {
         senderBuffer = String.fromCharCodes(data);

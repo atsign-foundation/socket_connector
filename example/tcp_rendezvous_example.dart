@@ -10,7 +10,7 @@ void main() async {
       serverPortB: 8000,
       verbose: true);
   print(
-      'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receierPort().toString()}');
+      'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
 
   InternetAddress? server = InternetAddress.tryParse('192.168.1.149');
 
@@ -21,5 +21,5 @@ void main() async {
       receiverPort: 2000,
       verbose: true);
   print(
-      'Sender Port: ${socketStream1.senderPort().toString()}  Receiver Port: ${socketStream1.receierPort().toString()}');
+      'Sender Port: ${socketStream1.senderPort().toString()}  Receiver Port: ${socketStream1.receiverPort().toString()}');
 }
