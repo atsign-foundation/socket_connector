@@ -1,23 +1,24 @@
 import 'dart:io';
-import 'package:tcp_rendezvous/src/handle_connection.dart';
+import 'package:chalkdart/chalk.dart';
+
 
 class SocketStream {
-  ServerSocket? serverSocketA;
-  ServerSocket? serverSocketB;
-  Socket? socketA;
+  ServerSocket? _serverSocketA;
+  ServerSocket? _serverSocketB;
+  Socket? _socketA;
   Socket? socketB;
-  int connectionsA = 0;
-  int connectionsB = 0;
+  int _connectionsA = 0;
+  int _connectionsB = 0;
 
   SocketStream(
-      this.socketB, this.socketA, this.connectionsB, this.connectionsA, this.serverSocketB, this.serverSocketA);
+      this.socketB, this._socketA, this._connectionsB, this._connectionsA, this._serverSocketB, this._serverSocketA);
 
   int? senderPort() {
-    return serverSocketA?.port;
+    return _serverSocketA?.port;
   }
 
   int? receiverPort() {
-    return serverSocketB?.port;
+    return _serverSocketB?.port;
   }
 
   static Future<SocketStream> serverToServer(
@@ -40,19 +41,19 @@ class SocketStream {
     //List<SocketStream> socketStreams;
     SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
     // bind the socket server to an address and port
-    socketStream.serverSocketA = await ServerSocket.bind(senderBindAddress, serverPortA);
+    socketStream._serverSocketA = await ServerSocket.bind(senderBindAddress, serverPortA);
     // bind the socket server to an address and port
-    socketStream.serverSocketB = await ServerSocket.bind(receiverBindAddress, serverPortB);
+    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, serverPortB);
 
     // listen for sender connections to the server
-    socketStream.serverSocketA?.listen((
+    socketStream._serverSocketA?.listen((
       sender,
     ) {
       handleSingleConnection(sender, true, socketStream, verbose!);
     });
 
     // listen for receiver connections to the server
-    socketStream.serverSocketB?.listen((receiver) {
+    socketStream._serverSocketB?.listen((receiver) {
       handleSingleConnection(receiver, false, socketStream, verbose!);
     });
     return (socketStream);
@@ -74,15 +75,15 @@ class SocketStream {
     SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
-    socketStream.socketA = await Socket.connect(socketAddress, socketPort);
+    socketStream._socketA = await Socket.connect(socketAddress, socketPort);
 
     // bind the socket server to an address and port
-    socketStream.serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
+    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
 
     // listen for sender connections to the server
-    handleSingleConnection(socketStream.socketA!, true, socketStream, verbose);
+    handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
-    socketStream.serverSocketB?.listen((receiver) {
+    socketStream._serverSocketB?.listen((receiver) {
       handleSingleConnection(receiver, false, socketStream, verbose!);
     });
     return (socketStream);
@@ -99,16 +100,111 @@ class SocketStream {
     SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
-    socketStream.socketA = await Socket.connect(socketAddressA, socketPortA);
+    socketStream._socketA = await Socket.connect(socketAddressA, socketPortA);
 
     // connect socket server to an address and port
     socketStream.socketB = await Socket.connect(socketAddressB, socketPortB);
 
     // listen for sender connections to the server
-    handleSingleConnection(socketStream.socketA!, true, socketStream, verbose);
+    handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     handleSingleConnection(socketStream.socketB!, false, socketStream, verbose);
 
     return (socketStream);
   }
+
+  static void handleSingleConnection(Socket socket, bool sender, SocketStream socketStream, bool verbose) {
+  List<int> buffer = [];
+  if (sender) {
+    socketStream._connectionsA++;
+    // If another connection is detected close it
+    if (socketStream._connectionsA > 1) {
+      socket.destroy();
+    } else {
+      socketStream._socketA = socket;
+    }
+  } else {
+    socketStream._connectionsB++;
+    // If another connection is detected close it
+    if (socketStream._connectionsB > 1) {
+      socket.destroy();
+    } else {
+      socketStream.socketB = socket;
+    }
+  }
+
+  // listen for events from the client
+  socket.listen(
+    // handle data from the client
+    (List<int> data) async {
+      final message = String.fromCharCodes(data);
+      if (sender) {
+        if (verbose) {
+          print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[^A-Za-z0-9 -/]'), '*')}\n'));
+        }
+        if (socketStream.socketB == null) {
+          buffer = (buffer + data);
+        } else {
+          data = (buffer + data);
+          try {
+            socketStream.socketB?.add(data);
+          } catch (e) {
+            stderr.write('Receiver Socket error : ${e.toString()}');
+          }
+          buffer.clear();
+        }
+      } else {
+        if (verbose) {
+          print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[^A-Za-z0-9 -/]'), '*')}\n'));
+        }
+        if (socketStream._socketA == null) {
+          buffer = (buffer + data);
+        } else {
+          data = (buffer + data);
+          try {
+            socketStream._socketA?.add(data);
+          } catch (e) {
+            stderr.write('Receiver Socket error : ${e.toString()}');
+          }
+          buffer.clear();
+        }
+      }
+    },
+
+    // handle errors
+    onError: (error) {
+      stderr.writeln('Error: $error');
+      socket.destroy();
+      if (sender) {
+        socketStream._connectionsA--;
+      } else {
+        socket.destroy();
+        socketStream._connectionsB--;
+      }
+    },
+
+    // handle the client closing the connection
+    onDone: () {
+      if (sender) {
+        socketStream._connectionsA--;
+        if (socketStream._connectionsA == 0) {
+          socketStream.socketB?.destroy();
+          socketStream.socketB = null;
+          socketStream._socketA = null;
+          socketStream._serverSocketA?.close();
+          socketStream._serverSocketB?.close();
+        }
+      } else {
+        socketStream._connectionsB--;
+        if (socketStream._connectionsB == 0) {
+          socketStream._socketA?.destroy();
+          socketStream.socketB = null;
+          socketStream._socketA = null;
+          socketStream._serverSocketA?.close();
+          socketStream._serverSocketB?.close();
+        }
+      }
+    },
+  );
+}
 }
