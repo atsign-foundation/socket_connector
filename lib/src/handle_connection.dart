@@ -3,7 +3,7 @@ import 'package:tcp_rendezvous/src/socket_stream.dart';
 
 import 'package:chalkdart/chalk.dart';
 
-void handleConnection(Socket socket, bool sender, SocketStream socketStream, bool verbose) {
+void handleSingleConnection(Socket socket, bool sender, SocketStream socketStream, bool verbose) {
   List<int> buffer = [];
   if (sender) {
     socketStream.connectionsA++;

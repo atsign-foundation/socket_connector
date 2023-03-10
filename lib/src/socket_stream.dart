@@ -48,12 +48,12 @@ class SocketStream {
     socketStream.serverSocketA?.listen((
       sender,
     ) {
-      handleConnection(sender, true, socketStream, verbose!);
+      handleSingleConnection(sender, true, socketStream, verbose!);
     });
 
     // listen for receiver connections to the server
     socketStream.serverSocketB?.listen((receiver) {
-      handleConnection(receiver, false, socketStream, verbose!);
+      handleSingleConnection(receiver, false, socketStream, verbose!);
     });
     return (socketStream);
   }
@@ -80,10 +80,10 @@ class SocketStream {
     socketStream.serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
 
     // listen for sender connections to the server
-    handleConnection(socketStream.socketA!, true, socketStream, verbose);
+    handleSingleConnection(socketStream.socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     socketStream.serverSocketB?.listen((receiver) {
-      handleConnection(receiver, false, socketStream, verbose!);
+      handleSingleConnection(receiver, false, socketStream, verbose!);
     });
     return (socketStream);
   }
@@ -94,7 +94,6 @@ class SocketStream {
       required InternetAddress socketAddressB,
       required int socketPortB,
       bool? verbose}) async {
-  
     verbose ??= false;
 
     SocketStream socketStream = SocketStream(null, null, 0, 0, null, null);
@@ -106,10 +105,10 @@ class SocketStream {
     socketStream.socketB = await Socket.connect(socketAddressB, socketPortB);
 
     // listen for sender connections to the server
-    handleConnection(socketStream.socketA!, true, socketStream, verbose);
+    handleSingleConnection(socketStream.socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
-    handleConnection(socketStream.socketB!, false, socketStream, verbose);
- 
+    handleSingleConnection(socketStream.socketB!, false, socketStream, verbose);
+
     return (socketStream);
   }
 }
