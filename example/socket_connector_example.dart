@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:tcp_rendezvous/tcp_rendezvous.dart';
+import 'package:tcp_rendezvous/socket_connector.dart';
 
 void main() async {
-  SocketStream socketStream = await SocketStream.serverToServer(
+  SocketConnector socketStream = await SocketConnector.serverToServer(
       serverAddressA: InternetAddress.anyIPv4,
       serverAddressB: InternetAddress.anyIPv4,
       serverPortA: 9000,
@@ -14,7 +14,7 @@ void main() async {
 
   InternetAddress? server = InternetAddress.tryParse('192.168.1.149');
 
-  SocketStream socketStream1 = await SocketStream.socketToServer(
+  SocketConnector socketStream1 = await SocketConnector.socketToServer(
       socketAddress: server!,
       socketPort: 22,
       serverAddress: InternetAddress.anyIPv4,
