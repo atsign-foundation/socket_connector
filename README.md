@@ -1,39 +1,36 @@
-<!-- 
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/guides/libraries/writing-package-pages). 
-
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-library-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/developing-packages). 
--->
-
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+Connect two TCP sockets and optionally display the traffic.
 
 ## Features
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+TCP Sockets come in two flavours a server and a client, you have to be one or the other. If you want to join to clients or two servers this package includes all the tools you need. to connect servers to servers and clients to clients. Why would you need this type of service? To create a rendezvous service that two clients can connect to for example or to join two servers with a shared client. Also included is a client to server, this acts as a simple TCP proxy and as with all the services you can optionally set the verbose flag and the readable (ascii) characters that are being transmitted and received will be displayed.
 
 ## Getting started
 
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
+dart pub add socket_connector
 
 ## Usage
 
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder. 
+The following code will open two server sockets and connect them and display any traffic that goes between the sockets. You can test this using ncat to connect to the two listening ports in two sessions. You will see what is typed in one window appear in the other plus see the data on at the dart program.
+
+`ncat 0 8000`
+
+`ncat 0 9000`
+
+
 
 ```dart
-const like = 'sample';
+SocketConnector socketStream = await SocketConnector.serverToServer(
+      serverAddressA: InternetAddress.anyIPv4,
+      serverAddressB: InternetAddress.anyIPv4,
+      serverPortA: 9000,
+      serverPortB: 8000,
+      verbose: true);
+  print(
+      'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
+	  }
 ```
 
 ## Additional information
 
-TODO: Tell users more about the package: where to find more information, how to 
-contribute to the package, how to file issues, what response they can expect 
-from the package authors, and more.
+TODO: All SocketConnectors only acceot a single session currently, so there is one type of connection that is currently missing which is server to socket which could allow separate sessions as clients connect. 
