@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:tcp_rendezvous/socket_connector.dart';
+import 'package:socket_connector/socket_connector.dart';
 import 'package:test/test.dart';
 
 void main() {

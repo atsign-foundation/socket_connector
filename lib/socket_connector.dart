@@ -1,4 +1,4 @@
 library tcp_rendezvous.dart;
 
-export 'package:tcp_rendezvous/src/socket_connector.dart';
+export 'package:socket_connector/src/socket_connector.dart';
 
