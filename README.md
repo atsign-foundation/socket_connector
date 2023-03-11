@@ -13,10 +13,11 @@ dart pub add socket_connector
 
 The following code will open two server sockets and connect them and display any traffic that goes between the sockets. You can test this using ncat to connect to the two listening ports in two sessions. You will see what is typed in one window appear in the other plus see the data on at the dart program.
 
-`ncat 0 8000`
+[![asciicast](https://asciinema.org/a/cglnKVtH16DPwWfqGJXgPMCKn.svg)](https://asciinema.org/a/cglnKVtH16DPwWfqGJXgPMCKn)
 
-`ncat 0 9000`
+`ncat localhost 8000`
 
+`ncat localhost 9000`
 
 
 ```dart
@@ -30,6 +31,8 @@ SocketConnector socketStream = await SocketConnector.serverToServer(
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
 	  }
 ```
+
+
 
 ## Additional information
 
