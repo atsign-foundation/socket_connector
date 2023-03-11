@@ -104,7 +104,7 @@ void main() {
       String receiverBuffer = "receiver";
       late Socket receiverSocketA;
       late Socket receiverSocketB;
-   await Future.delayed(Duration(seconds: 1));
+
       socketSocketTestA.listen((socket) {
         receiverSocketA = socket;
         receiverSocketA.listen((List<int> data) {
