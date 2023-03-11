@@ -3,7 +3,7 @@ Connect two TCP sockets and optionally display the traffic.
 
 ## Features
 
-TCP Sockets come in two flavours a server and a client, you have to be one or the other. If you want to join to clients or two servers this package includes all the tools you need. to connect servers to servers and clients to clients. Why would you need this type of service? To create a rendezvous service that two clients can connect to for example or to join two servers with a shared client. Also included is a client to server, this acts as a simple TCP proxy and as with all the services you can optionally set the verbose flag and the readable (ascii) characters that are being transmitted and received will be displayed.
+TCP Sockets come in two flavours a server and a client, you have to be one or the other. If you want to join two clients or two servers this package includes all the tools you need. to connect servers to servers and clients to clients. Why would you need this type of service? To create a rendezvous service that two clients can connect to for example or to join two servers with a shared client. Also included is a client to server, this acts as a simple TCP proxy and as with all the services you can optionally set the verbose flag and the readable (ascii) characters that are being transmitted and received will be displayed.
 
 ## Getting started
 

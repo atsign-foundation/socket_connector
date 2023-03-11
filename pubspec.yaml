@@ -1,5 +1,6 @@
 name: socket_connector
-description: A starting point for Dart libraries or applications.
+description: Connect two TCP sockets and optionally display the traffic.
+
 version: 1.0.0
 repository: https://github.com/cconstab/socket_connector
 
