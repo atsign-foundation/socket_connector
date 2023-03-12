@@ -1,7 +1,7 @@
 name: socket_connector
 description: Connect two TCP sockets and optionally display the traffic.
 
-version: 1.0.1
+version: 1.0.2
 repository: https://github.com/cconstab/socket_connector
 
 environment:
