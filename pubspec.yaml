@@ -1,5 +1,5 @@
 name: socket_connector
-description: Connect two TCP sockets and optionally display the traffic.
+description: Package allows you to join two TCP clients or two servers this package includes all the tools you need to connet and optionally print the traffic.
 
 version: 1.0.2
 repository: https://github.com/cconstab/socket_connector
