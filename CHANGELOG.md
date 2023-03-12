@@ -1,3 +1,6 @@
+## 1.0.4
+
+- Formated with dart format 140/140 (I hope)
 ## 1.0.3
 
 - Included dart docs and formated with dart format
