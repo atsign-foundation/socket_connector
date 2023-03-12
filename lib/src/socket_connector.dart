@@ -11,15 +11,17 @@ class SocketConnector {
 
   SocketConnector(this._socketB, this._socketA, this._connectionsB,
       this._connectionsA, this._serverSocketB, this._serverSocketA);
-
+/// Returns the TCP port number of the sender socket
   int? senderPort() {
     return _serverSocketA?.port;
   }
-
+/// Returns the TCP port of the receiver socket
   int? receiverPort() {
     return _serverSocketB?.port;
   }
-
+/// Binds two Server sockets on specified Internet Addresses.
+/// Ports on which to listen can be given but if not given a spare port will be found by the OS.
+/// Finally relays data between sockets and optionaly displays contents using the verbose flag
   static Future<SocketConnector> serverToServer(
       {InternetAddress? serverAddressA,
       InternetAddress? serverAddressB,
@@ -61,6 +63,10 @@ class SocketConnector {
     return (socketStream);
   }
 
+/// Binds a Server socket on a specified InternetAddress
+/// Port on which to listen can be specified but if not given a spare port will be found by the OS.
+/// Then opens socket to specified Internet Address and port
+/// Finally relays data between sockets and optionaly displays contents using the verbose flag
   static Future<SocketConnector> socketToServer(
       {required InternetAddress socketAddress,
       required int socketPort,
@@ -94,6 +100,8 @@ class SocketConnector {
     return (socketStream);
   }
 
+/// Opens sockets specified Internet Addresses and ports
+/// Then relays data between sockets and optionaly displays contents using the verbose flag
   static Future<SocketConnector> socketToSocket(
       {required InternetAddress socketAddressA,
       required int socketPortA,
@@ -148,6 +156,7 @@ class SocketConnector {
       (List<int> data) async {
         final message = String.fromCharCodes(data);
         if (sender) {
+          // If verbose flag set print contents that are printable
           if (verbose) {
             print(chalk.brightGreen(
                 'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
@@ -164,6 +173,7 @@ class SocketConnector {
             buffer.clear();
           }
         } else {
+          // If verbose flag set print contents that are printable
           if (verbose) {
             print(chalk.brightRed(
                 'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));

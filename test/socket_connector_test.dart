@@ -17,15 +17,17 @@ void main() {
     late SocketConnector socketToSocketConnector;
     setUp(() async {
       //Set up for serverToServer
-      serverToServerSocketConnector =
-          await SocketConnector.serverToServer(serverPortA: 0, serverPortB: 0, verbose: true);
+      serverToServerSocketConnector = await SocketConnector.serverToServer(
+          serverPortA: 0, serverPortB: 0, verbose: true);
       senderPort = serverToServerSocketConnector.senderPort();
       receiverPort = serverToServerSocketConnector.receiverPort();
 
       //Setup for socketToServer
       serverSocketTest = await ServerSocket.bind('127.0.0.1', 0);
       socketToServerSocketConnector = await SocketConnector.socketToServer(
-          socketAddress: InternetAddress('127.0.0.1'), socketPort: serverSocketTest.port, verbose: true);
+          socketAddress: InternetAddress('127.0.0.1'),
+          socketPort: serverSocketTest.port,
+          verbose: true);
 
       //SetUp for socketToSocket
       socketSocketTestA = await ServerSocket.bind('127.0.0.1', 0);
@@ -49,8 +51,10 @@ void main() {
     test('Test ServerToServer', () async {
       String senderBuffer = "sender";
       String receiverBuffer = "receiver";
-      Socket? socketReceiver = await Socket.connect('localhost', serverToServerSocketConnector.senderPort()!);
-      Socket? socketSender = await Socket.connect('localhost', serverToServerSocketConnector.receiverPort()!);
+      Socket? socketReceiver = await Socket.connect(
+          'localhost', serverToServerSocketConnector.senderPort()!);
+      Socket? socketSender = await Socket.connect(
+          'localhost', serverToServerSocketConnector.receiverPort()!);
 
       socketSender.listen((List<int> data) {
         senderBuffer = String.fromCharCodes(data);
@@ -64,7 +68,10 @@ void main() {
       socketReceiver.write('hello world to sender');
       // We need to wait for the sockets to send and receive data
       await Future.delayed(Duration(seconds: 1));
-      expect((senderBuffer == "hello world to sender") & (receiverBuffer == "hello world to receiver"), isTrue);
+      expect(
+          (senderBuffer == "hello world to sender") &
+              (receiverBuffer == "hello world to receiver"),
+          isTrue);
     });
 
     test('Test socketToServer', () async {
@@ -72,7 +79,8 @@ void main() {
       String receiverBuffer = "receiver";
 
       late Socket receiverSocket;
-      Socket? senderSocket = await Socket.connect('localhost', socketToServerSocketConnector.receiverPort()!);
+      Socket? senderSocket = await Socket.connect(
+          'localhost', socketToServerSocketConnector.receiverPort()!);
 
       senderSocket.listen((List<int> data) {
         senderBuffer = String.fromCharCodes(data);
@@ -96,7 +104,10 @@ void main() {
       // We need to wait for the sockets to send and receive data
       await Future.delayed(Duration(seconds: 1));
 
-      expect((senderBuffer == "hello world to sender") & (receiverBuffer == "hello world to receiver"), isTrue);
+      expect(
+          (senderBuffer == "hello world to sender") &
+              (receiverBuffer == "hello world to receiver"),
+          isTrue);
     });
 
     test('Test socketToSocket', () async {
@@ -119,14 +130,15 @@ void main() {
         });
       });
 
-   await Future.delayed(Duration(seconds: 1));
+      await Future.delayed(Duration(seconds: 1));
       receiverSocketA.write("hello world to sender");
       receiverSocketB.write('hello world to receiver');
       await Future.delayed(Duration(seconds: 1));
 
-
-
-      expect((senderBuffer == "hello world to sender") & (receiverBuffer == "hello world to receiver"), isTrue);
+      expect(
+          (senderBuffer == "hello world to sender") &
+              (receiverBuffer == "hello world to receiver"),
+          isTrue);
     });
   });
 }
