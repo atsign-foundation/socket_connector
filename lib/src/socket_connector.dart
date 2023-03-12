@@ -139,7 +139,7 @@ class SocketConnector {
         final message = String.fromCharCodes(data);
         if (sender) {
           if (verbose) {
-            print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}\n'));
+            print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketB == null) {
             buffer = (buffer + data);
@@ -154,7 +154,7 @@ class SocketConnector {
           }
         } else {
           if (verbose) {
-            print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}\n'));
+            print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketA == null) {
             buffer = (buffer + data);
