@@ -9,8 +9,8 @@ class SocketConnector {
   int _connectionsA = 0;
   int _connectionsB = 0;
 
-  SocketConnector(
-      this._socketB, this._socketA, this._connectionsB, this._connectionsA, this._serverSocketB, this._serverSocketA);
+  SocketConnector(this._socketB, this._socketA, this._connectionsB,
+      this._connectionsA, this._serverSocketB, this._serverSocketA);
 
   int? senderPort() {
     return _serverSocketA?.port;
@@ -38,11 +38,14 @@ class SocketConnector {
     receiverBindAddress = serverAddressA;
 
     //List<SocketStream> socketStreams;
-    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream =
+        SocketConnector(null, null, 0, 0, null, null);
     // bind the socket server to an address and port
-    socketStream._serverSocketA = await ServerSocket.bind(senderBindAddress, serverPortA);
+    socketStream._serverSocketA =
+        await ServerSocket.bind(senderBindAddress, serverPortA);
     // bind the socket server to an address and port
-    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, serverPortB);
+    socketStream._serverSocketB =
+        await ServerSocket.bind(receiverBindAddress, serverPortB);
 
     // listen for sender connections to the server
     socketStream._serverSocketA?.listen((
@@ -71,16 +74,19 @@ class SocketConnector {
     serverAddress ??= InternetAddress.anyIPv4;
     receiverBindAddress = serverAddress;
 
-    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream =
+        SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
     socketStream._socketA = await Socket.connect(socketAddress, socketPort);
 
     // bind the socket server to an address and port
-    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
+    socketStream._serverSocketB =
+        await ServerSocket.bind(receiverBindAddress, receiverPort);
 
     // listen for sender connections to the server
-    _handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
+    _handleSingleConnection(
+        socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     socketStream._serverSocketB?.listen((receiver) {
       _handleSingleConnection(receiver, false, socketStream, verbose!);
@@ -96,7 +102,8 @@ class SocketConnector {
       bool? verbose}) async {
     verbose ??= false;
 
-    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream =
+        SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
     socketStream._socketA = await Socket.connect(socketAddressA, socketPortA);
@@ -105,14 +112,17 @@ class SocketConnector {
     socketStream._socketB = await Socket.connect(socketAddressB, socketPortB);
 
     // listen for sender connections to the server
-    _handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
+    _handleSingleConnection(
+        socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
-    _handleSingleConnection(socketStream._socketB!, false, socketStream, verbose);
+    _handleSingleConnection(
+        socketStream._socketB!, false, socketStream, verbose);
 
     return (socketStream);
   }
 
-  static void _handleSingleConnection(Socket socket, bool sender, SocketConnector socketStream, bool verbose) {
+  static void _handleSingleConnection(
+      Socket socket, bool sender, SocketConnector socketStream, bool verbose) {
     List<int> buffer = [];
     if (sender) {
       socketStream._connectionsA++;
@@ -139,7 +149,8 @@ class SocketConnector {
         final message = String.fromCharCodes(data);
         if (sender) {
           if (verbose) {
-            print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            print(chalk.brightGreen(
+                'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketB == null) {
             buffer = (buffer + data);
@@ -154,7 +165,8 @@ class SocketConnector {
           }
         } else {
           if (verbose) {
-            print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            print(chalk.brightRed(
+                'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketA == null) {
             buffer = (buffer + data);
