@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:chalkdart/chalk.dart';
 
@@ -20,6 +21,14 @@ class SocketConnector {
   /// Returns the TCP port of the receiver socket
   int? receiverPort() {
     return _serverSocketB?.port;
+  }
+
+  bool closed() {
+    bool closed = false;
+    if ((_socketA == null) || (_socketB == null)) {
+      closed = true;
+    }
+    return (closed);
   }
 
   /// Binds two Server sockets on specified Internet Addresses.
@@ -63,6 +72,7 @@ class SocketConnector {
     socketStream._serverSocketB?.listen((receiver) {
       _handleSingleConnection(receiver, false, socketStream, verbose!);
     });
+
     return (socketStream);
   }
 
@@ -132,9 +142,10 @@ class SocketConnector {
     return (socketStream);
   }
 
-  static void _handleSingleConnection(
-      Socket socket, bool sender, SocketConnector socketStream, bool verbose) {
+  static Future<StreamSubscription> _handleSingleConnection(Socket socket,
+      bool sender, SocketConnector socketStream, bool verbose) async {
     List<int> buffer = [];
+    StreamSubscription subscription;
     if (sender) {
       socketStream._connectionsA++;
       // If another connection is detected close it
@@ -154,7 +165,7 @@ class SocketConnector {
     }
 
     // listen for events from the client
-    socket.listen(
+    subscription = socket.listen(
       // handle data from the client
       (List<int> data) async {
         final message = String.fromCharCodes(data);
@@ -230,5 +241,6 @@ class SocketConnector {
         }
       },
     );
+    return (subscription);
   }
 }
