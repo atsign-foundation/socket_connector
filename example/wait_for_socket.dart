@@ -18,11 +18,14 @@ void main(List<String> arguments) async {
         'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
     print('Socket Ready');
 
-    await Future.delayed(Duration(seconds: 10));
+    // await Future.delayed(Duration(seconds: 10));
     print('Socket check');
-    while (socketStream.closed() == false) {
+    bool closed = false;
+    while (closed == false) {
       print('Socket Open');
-      await Future.delayed(Duration(seconds: 5));
+      closed = await socketStream.closed();
+      print(closed);
+      // await Future.delayed(Duration(seconds: 10));
     }
     print('Socket Dead');
   }
