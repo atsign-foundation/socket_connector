@@ -23,11 +23,11 @@ class SocketConnector {
     return _serverSocketB?.port;
   }
 
-/// returns true if sockets are closed/null
-/// wait a few seconds to ensure network has a chance
-  Future <bool> closed() async {
+  /// returns true if sockets are closed/null
+  /// wait 30 seconds to ensure network has a chance
+  Future<bool> closed() async {
     bool closed = false;
-    await Future.delayed(Duration(seconds: 10));
+    await Future.delayed(Duration(seconds: 30));
     if ((_socketA == null) | (_socketB == null)) {
       closed = true;
     }
