@@ -1,4 +1,7 @@
-## 1.0.5
+## 1.0.7
+
+- fix change log
+## 1.0.6
 
 - Bug fix with cloing sockets.
 ## 1.0.5
