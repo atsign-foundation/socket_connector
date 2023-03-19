@@ -1,5 +1,8 @@
 ## 1.0.5
 
+- Bug fix with cloing sockets.
+## 1.0.5
+
 - Ready for isolates
 ## 1.0.4
 
