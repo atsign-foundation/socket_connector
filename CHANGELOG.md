@@ -1,3 +1,6 @@
+## 1.0.8
+
+- Added connection timeout if only one side connects
 ## 1.0.7
 
 - fix change log

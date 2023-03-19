@@ -28,6 +28,13 @@ class SocketConnector {
   Future<bool> closed() async {
     bool closed = false;
     await Future.delayed(Duration(seconds: 30));
+    if ((_connectionsA ==0) || (_connectionsB == 0)){
+      _socketA?.destroy();
+      _socketB?.destroy();
+    // Some time for the IP stack to destroy
+    await Future.delayed(Duration(seconds: 3));
+    }
+
     if ((_socketA == null) || (_socketB == null)) {
       closed = true;
     }
