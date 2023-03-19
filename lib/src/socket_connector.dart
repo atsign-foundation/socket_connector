@@ -28,7 +28,7 @@ class SocketConnector {
   Future<bool> closed() async {
     bool closed = false;
     await Future.delayed(Duration(seconds: 30));
-    if ((_socketA == null) | (_socketB == null)) {
+    if ((_socketA == null) || (_socketB == null)) {
       closed = true;
     }
     return (closed);
