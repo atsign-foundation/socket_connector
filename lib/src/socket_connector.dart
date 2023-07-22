@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:chalkdart/chalk.dart';
 
 class SocketConnector {
@@ -28,11 +29,11 @@ class SocketConnector {
   Future<bool> closed() async {
     bool closed = false;
     await Future.delayed(Duration(seconds: 30));
-    if ((_connectionsA ==0) || (_connectionsB == 0)){
+    if ((_connectionsA == 0) || (_connectionsB == 0)) {
       _socketA?.destroy();
       _socketB?.destroy();
-    // Some time for the IP stack to destroy
-    await Future.delayed(Duration(seconds: 3));
+      // Some time for the IP stack to destroy
+      await Future.delayed(Duration(seconds: 3));
     }
 
     if ((_socketA == null) || (_socketB == null)) {
@@ -152,9 +153,12 @@ class SocketConnector {
     return (socketStream);
   }
 
-  static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
-      final bool sender, final SocketConnector socketStream, final bool verbose) async {
-    List<int> buffer = [];
+  static Future<StreamSubscription> _handleSingleConnection(
+      final Socket socket,
+      final bool sender,
+      final SocketConnector socketStream,
+      final bool verbose) async {
+    var buffer = BytesBuilder();
     StreamSubscription subscription;
     if (sender) {
       socketStream._connectionsA++;
@@ -177,18 +181,19 @@ class SocketConnector {
     // listen for events from the client
     subscription = socket.listen(
       // handle data from the client
-      (List<int> data) async {
+      (Uint8List data) async {
         if (sender) {
           // If verbose flag set print contents that are printable
-        //   if (verbose) {
-        // final message = String.fromCharCodes(data);
-        //     print(chalk.brightGreen(
-        //         'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-        //   }
+          if (verbose) {
+            final message = String.fromCharCodes(data);
+            print(chalk.brightGreen(
+                'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+          }
           if (socketStream._socketB == null) {
-            buffer = (buffer + data);
+            buffer.add(data);
           } else {
-            data = (buffer + data);
+            buffer.add(data);
+            data = buffer.takeBytes();
             try {
               socketStream._socketB?.add(data);
             } catch (e) {
@@ -198,15 +203,16 @@ class SocketConnector {
           }
         } else {
           // If verbose flag set print contents that are printable
-          // if (verbose) {
-          //   final message = String.fromCharCodes(data);
-          //   print(chalk.brightRed(
-          //       'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-          // }
+          if (verbose) {
+            final message = String.fromCharCodes(data);
+            print(chalk.brightRed(
+                'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+          }
           if (socketStream._socketA == null) {
-            buffer = (buffer + data);
-          } else {
-            data = (buffer + data);
+            buffer.add(data);          
+            } else {
+            buffer.add(data);
+            data = buffer.takeBytes();
             try {
               socketStream._socketA?.add(data);
             } catch (e) {
