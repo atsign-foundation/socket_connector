@@ -152,8 +152,8 @@ class SocketConnector {
     return (socketStream);
   }
 
-  static Future<StreamSubscription> _handleSingleConnection(Socket socket,
-      bool sender, SocketConnector socketStream, bool verbose) async {
+  static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
+      final bool sender, final SocketConnector socketStream, final bool verbose) async {
     List<int> buffer = [];
     StreamSubscription subscription;
     if (sender) {
