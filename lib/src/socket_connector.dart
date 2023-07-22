@@ -178,10 +178,10 @@ class SocketConnector {
     subscription = socket.listen(
       // handle data from the client
       (List<int> data) async {
-        final message = String.fromCharCodes(data);
         if (sender) {
           // If verbose flag set print contents that are printable
           if (verbose) {
+        final message = String.fromCharCodes(data);
             print(chalk.brightGreen(
                 'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
@@ -199,6 +199,7 @@ class SocketConnector {
         } else {
           // If verbose flag set print contents that are printable
           if (verbose) {
+            final message = String.fromCharCodes(data);
             print(chalk.brightRed(
                 'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
