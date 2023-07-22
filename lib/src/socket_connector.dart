@@ -180,11 +180,11 @@ class SocketConnector {
       (List<int> data) async {
         if (sender) {
           // If verbose flag set print contents that are printable
-          if (verbose) {
-        final message = String.fromCharCodes(data);
-            print(chalk.brightGreen(
-                'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-          }
+        //   if (verbose) {
+        // final message = String.fromCharCodes(data);
+        //     print(chalk.brightGreen(
+        //         'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+        //   }
           if (socketStream._socketB == null) {
             buffer = (buffer + data);
           } else {
@@ -198,11 +198,11 @@ class SocketConnector {
           }
         } else {
           // If verbose flag set print contents that are printable
-          if (verbose) {
-            final message = String.fromCharCodes(data);
-            print(chalk.brightRed(
-                'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-          }
+          // if (verbose) {
+          //   final message = String.fromCharCodes(data);
+          //   print(chalk.brightRed(
+          //       'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+          // }
           if (socketStream._socketA == null) {
             buffer = (buffer + data);
           } else {
