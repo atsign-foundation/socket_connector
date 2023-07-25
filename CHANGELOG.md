@@ -1,3 +1,6 @@
+## 1.0.9
+- Improved network throughput of socket_connector
+
 ## 1.0.8
 
 - Added connection timeout if only one side connects
