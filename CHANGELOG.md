@@ -1,3 +1,6 @@
+## 1.0.10
+- Small format error to get to 140/140 on pub.dev
+
 ## 1.0.9
 - Improved network throughput of socket_connector
 
