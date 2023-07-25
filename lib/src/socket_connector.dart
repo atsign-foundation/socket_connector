@@ -209,8 +209,8 @@ class SocketConnector {
                 'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketA == null) {
-            buffer.add(data);          
-            } else {
+            buffer.add(data);
+          } else {
             buffer.add(data);
             data = buffer.takeBytes();
             try {
