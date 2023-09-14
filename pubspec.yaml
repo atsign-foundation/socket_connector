@@ -1,7 +1,7 @@
 name: socket_connector
 description: Package allows you to join two TCP clients or two servers this package includes all the tools you need to connet and optionally print the traffic.
 
-version: 1.0.10
+version: 1.0.11
 repository: https://github.com/cconstab/socket_connector
 
 environment:

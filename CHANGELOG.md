@@ -1,3 +1,6 @@
+## 1.0.11
+- Added close function to SocketConnector
+
 ## 1.0.10
 - Small format error to get to 140/140 on pub.dev
 
