@@ -11,8 +11,8 @@ class SocketConnector {
   int _connectionsA = 0;
   int _connectionsB = 0;
 
-  SocketConnector(this._socketB, this._socketA, this._connectionsB,
-      this._connectionsA, this._serverSocketB, this._serverSocketA);
+  SocketConnector(
+      this._socketB, this._socketA, this._connectionsB, this._connectionsA, this._serverSocketB, this._serverSocketA);
 
   /// Returns the TCP port number of the sender socket
   int? senderPort() {
@@ -42,6 +42,11 @@ class SocketConnector {
     return (closed);
   }
 
+  void close() {
+    _socketA?.destroy();
+    _socketB?.destroy();
+  }
+
   /// Binds two Server sockets on specified Internet Addresses.
   /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
   /// Finally relays data between sockets and optionaly displays contents using the verbose flag
@@ -63,14 +68,11 @@ class SocketConnector {
     receiverBindAddress = serverAddressA;
 
     //List<SocketStream> socketStreams;
-    SocketConnector socketStream =
-        SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
     // bind the socket server to an address and port
-    socketStream._serverSocketA =
-        await ServerSocket.bind(senderBindAddress, serverPortA);
+    socketStream._serverSocketA = await ServerSocket.bind(senderBindAddress, serverPortA);
     // bind the socket server to an address and port
-    socketStream._serverSocketB =
-        await ServerSocket.bind(receiverBindAddress, serverPortB);
+    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, serverPortB);
 
     // listen for sender connections to the server
     socketStream._serverSocketA?.listen((
@@ -104,19 +106,16 @@ class SocketConnector {
     serverAddress ??= InternetAddress.anyIPv4;
     receiverBindAddress = serverAddress;
 
-    SocketConnector socketStream =
-        SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
     socketStream._socketA = await Socket.connect(socketAddress, socketPort);
 
     // bind the socket server to an address and port
-    socketStream._serverSocketB =
-        await ServerSocket.bind(receiverBindAddress, receiverPort);
+    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
 
     // listen for sender connections to the server
-    _handleSingleConnection(
-        socketStream._socketA!, true, socketStream, verbose);
+    _handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     socketStream._serverSocketB?.listen((receiver) {
       _handleSingleConnection(receiver, false, socketStream, verbose!);
@@ -134,8 +133,7 @@ class SocketConnector {
       bool? verbose}) async {
     verbose ??= false;
 
-    SocketConnector socketStream =
-        SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
     socketStream._socketA = await Socket.connect(socketAddressA, socketPortA);
@@ -144,20 +142,15 @@ class SocketConnector {
     socketStream._socketB = await Socket.connect(socketAddressB, socketPortB);
 
     // listen for sender connections to the server
-    _handleSingleConnection(
-        socketStream._socketA!, true, socketStream, verbose);
+    _handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
-    _handleSingleConnection(
-        socketStream._socketB!, false, socketStream, verbose);
+    _handleSingleConnection(socketStream._socketB!, false, socketStream, verbose);
 
     return (socketStream);
   }
 
   static Future<StreamSubscription> _handleSingleConnection(
-      final Socket socket,
-      final bool sender,
-      final SocketConnector socketStream,
-      final bool verbose) async {
+      final Socket socket, final bool sender, final SocketConnector socketStream, final bool verbose) async {
     var buffer = BytesBuilder();
     StreamSubscription subscription;
     if (sender) {
@@ -186,8 +179,7 @@ class SocketConnector {
           // If verbose flag set print contents that are printable
           if (verbose) {
             final message = String.fromCharCodes(data);
-            print(chalk.brightGreen(
-                'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketB == null) {
             buffer.add(data);
@@ -205,8 +197,7 @@ class SocketConnector {
           // If verbose flag set print contents that are printable
           if (verbose) {
             final message = String.fromCharCodes(data);
-            print(chalk.brightRed(
-                'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketA == null) {
             buffer.add(data);
