@@ -5,16 +5,17 @@ import 'package:chalkdart/chalk.dart';
 
 abstract class SocketAuthenticator {
   /// Is passed data which has been received on the socket.
-  /// If authentication cannot complete (needs more data) then
+  ///
+  /// - If authentication cannot complete (needs more data) then
   /// should return (false, null).
-  /// If authentication is complete then should return (false, unusedData).
-  /// If authentication fails then should throw an exception.
+  /// - If authentication is complete then should return (true, unusedData).
+  /// - If authentication fails then should throw an exception.
   /// May write to the [socket] as required but note that it should then return
   /// if it expects more data, since the caller is listening to the
   /// socket's data stream.
   ///
-  /// If returns complete == true, then authentication has been successful
-  (bool complete, Uint8List? unused) onData(Uint8List data, Socket socket);
+  /// If returns authenticated == true, then authentication has been successful
+  (bool authenticated, Uint8List? unused) onData(Uint8List data, Socket socket);
 }
 
 class SocketConnector {
