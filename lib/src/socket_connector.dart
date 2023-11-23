@@ -3,6 +3,20 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:chalkdart/chalk.dart';
 
+abstract class SocketAuthenticator {
+  /// Is passed data which has been received on the socket.
+  /// If authentication cannot complete (needs more data) then
+  /// should return (false, null).
+  /// If authentication is complete then should return (false, unusedData).
+  /// If authentication fails then should throw an exception.
+  /// May write to the [socket] as required but note that it should then return
+  /// if it expects more data, since the caller is listening to the
+  /// socket's data stream.
+  ///
+  /// If returns complete == true, then authentication has been successful
+  (bool complete, Uint8List? unused) onData(Uint8List data, Socket socket);
+}
+
 class SocketConnector {
   ServerSocket? _serverSocketA;
   ServerSocket? _serverSocketB;
@@ -11,8 +25,8 @@ class SocketConnector {
   int _connectionsA = 0;
   int _connectionsB = 0;
 
-  SocketConnector(
-      this._socketB, this._socketA, this._connectionsB, this._connectionsA, this._serverSocketB, this._serverSocketA);
+  SocketConnector(this._socketB, this._socketA, this._connectionsB,
+      this._connectionsA, this._serverSocketB, this._serverSocketA);
 
   /// Returns the TCP port number of the sender socket
   int? senderPort() {
@@ -49,13 +63,16 @@ class SocketConnector {
 
   /// Binds two Server sockets on specified Internet Addresses.
   /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
-  /// Finally relays data between sockets and optionaly displays contents using the verbose flag
-  static Future<SocketConnector> serverToServer(
-      {InternetAddress? serverAddressA,
-      InternetAddress? serverAddressB,
-      int? serverPortA,
-      int? serverPortB,
-      bool? verbose}) async {
+  /// Finally relays data between sockets and optionally displays contents using the verbose flag
+  static Future<SocketConnector> serverToServer({
+    InternetAddress? serverAddressA,
+    InternetAddress? serverAddressB,
+    int? serverPortA,
+    int? serverPortB,
+    bool? verbose,
+    SocketAuthenticator? socketAuthenticatorA,
+    SocketAuthenticator? socketAuthenticatorB,
+  }) async {
     InternetAddress senderBindAddress;
     InternetAddress receiverBindAddress;
     serverPortA ??= 0;
@@ -68,22 +85,27 @@ class SocketConnector {
     receiverBindAddress = serverAddressA;
 
     //List<SocketStream> socketStreams;
-    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream =
+        SocketConnector(null, null, 0, 0, null, null);
     // bind the socket server to an address and port
-    socketStream._serverSocketA = await ServerSocket.bind(senderBindAddress, serverPortA);
+    socketStream._serverSocketA =
+        await ServerSocket.bind(senderBindAddress, serverPortA);
     // bind the socket server to an address and port
-    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, serverPortB);
+    socketStream._serverSocketB =
+        await ServerSocket.bind(receiverBindAddress, serverPortB);
 
     // listen for sender connections to the server
     socketStream._serverSocketA?.listen((
       sender,
     ) {
-      _handleSingleConnection(sender, true, socketStream, verbose!);
+      _handleSingleConnection(sender, true, socketStream, verbose!,
+          socketAuthenticator: socketAuthenticatorA);
     });
 
     // listen for receiver connections to the server
     socketStream._serverSocketB?.listen((receiver) {
-      _handleSingleConnection(receiver, false, socketStream, verbose!);
+      _handleSingleConnection(receiver, false, socketStream, verbose!,
+          socketAuthenticator: socketAuthenticatorB);
     });
 
     return (socketStream);
@@ -92,7 +114,7 @@ class SocketConnector {
   /// Binds a Server socket on a specified InternetAddress
   /// Port on which to listen can be specified but if not given a spare port will be found by the OS.
   /// Then opens socket to specified Internet Address and port
-  /// Finally relays data between sockets and optionaly displays contents using the verbose flag
+  /// Finally relays data between sockets and optionally displays contents using the verbose flag
   static Future<SocketConnector> socketToServer(
       {required InternetAddress socketAddress,
       required int socketPort,
@@ -106,16 +128,19 @@ class SocketConnector {
     serverAddress ??= InternetAddress.anyIPv4;
     receiverBindAddress = serverAddress;
 
-    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream =
+        SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
     socketStream._socketA = await Socket.connect(socketAddress, socketPort);
 
     // bind the socket server to an address and port
-    socketStream._serverSocketB = await ServerSocket.bind(receiverBindAddress, receiverPort);
+    socketStream._serverSocketB =
+        await ServerSocket.bind(receiverBindAddress, receiverPort);
 
     // listen for sender connections to the server
-    _handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
+    _handleSingleConnection(
+        socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     socketStream._serverSocketB?.listen((receiver) {
       _handleSingleConnection(receiver, false, socketStream, verbose!);
@@ -124,7 +149,7 @@ class SocketConnector {
   }
 
   /// Opens sockets specified Internet Addresses and ports
-  /// Then relays data between sockets and optionaly displays contents using the verbose flag
+  /// Then relays data between sockets and optionally displays contents using the verbose flag
   static Future<SocketConnector> socketToSocket(
       {required InternetAddress socketAddressA,
       required int socketPortA,
@@ -133,7 +158,8 @@ class SocketConnector {
       bool? verbose}) async {
     verbose ??= false;
 
-    SocketConnector socketStream = SocketConnector(null, null, 0, 0, null, null);
+    SocketConnector socketStream =
+        SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
     socketStream._socketA = await Socket.connect(socketAddressA, socketPortA);
@@ -142,15 +168,18 @@ class SocketConnector {
     socketStream._socketB = await Socket.connect(socketAddressB, socketPortB);
 
     // listen for sender connections to the server
-    _handleSingleConnection(socketStream._socketA!, true, socketStream, verbose);
+    _handleSingleConnection(
+        socketStream._socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
-    _handleSingleConnection(socketStream._socketB!, false, socketStream, verbose);
+    _handleSingleConnection(
+        socketStream._socketB!, false, socketStream, verbose);
 
     return (socketStream);
   }
 
-  static Future<StreamSubscription> _handleSingleConnection(
-      final Socket socket, final bool sender, final SocketConnector socketStream, final bool verbose) async {
+  static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
+      final bool sender, final SocketConnector socketStream, final bool verbose,
+      {SocketAuthenticator? socketAuthenticator}) async {
     var buffer = BytesBuilder();
     StreamSubscription subscription;
     if (sender) {
@@ -176,10 +205,37 @@ class SocketConnector {
       // handle data from the client
       (Uint8List data) async {
         if (sender) {
+          if (socketAuthenticator != null) {
+            try {
+              bool authenticationComplete = false;
+              Uint8List? unusedData;
+              do {
+                (authenticationComplete, unusedData) = socketAuthenticator
+                    .onData(data, socket);
+              } while (!authenticationComplete);
+
+              if (unusedData != null) {
+                data = unusedData;
+              } else {
+                return;
+              }
+            } catch (e) {
+              // authentication has failed. Destroy the socket.
+              stderr.writeln('Error during socket authentication: $e');
+              socket.destroy();
+              if (sender) {
+                socketStream._connectionsA--;
+              } else {
+                socket.destroy();
+                socketStream._connectionsB--;
+              }
+            }
+          }
           // If verbose flag set print contents that are printable
           if (verbose) {
             final message = String.fromCharCodes(data);
-            print(chalk.brightGreen('Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            print(chalk.brightGreen(
+                'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketB == null) {
             buffer.add(data);
@@ -197,7 +253,8 @@ class SocketConnector {
           // If verbose flag set print contents that are printable
           if (verbose) {
             final message = String.fromCharCodes(data);
-            print(chalk.brightRed('Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            print(chalk.brightRed(
+                'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
           }
           if (socketStream._socketA == null) {
             buffer.add(data);
