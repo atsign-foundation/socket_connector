@@ -9,7 +9,7 @@ abstract class SocketAuthenticator {
   /// - If authentication cannot complete (needs more data) then
   /// should return (false, null).
   /// - If authentication is complete then should return (true, unusedData).
-  /// - If authentication fails then should throw an exception.
+  /// - If authentication fails then should throw an [Exception].
   /// May write to the [socket] as required but note that it should then return
   /// if it expects more data, since the caller is listening to the
   /// socket's data stream.
@@ -25,6 +25,8 @@ class SocketConnector {
   Socket? _socketB;
   int _connectionsA = 0;
   int _connectionsB = 0;
+  bool isAuthenticatedSocketA = false;
+  bool isAuthenticatedSocketB = false;
 
   SocketConnector(this._socketB, this._socketA, this._connectionsB,
       this._connectionsA, this._serverSocketB, this._serverSocketA);
@@ -181,7 +183,6 @@ class SocketConnector {
   static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
       final bool sender, final SocketConnector socketStream, final bool verbose,
       {SocketAuthenticator? socketAuthenticator}) async {
-    var buffer = BytesBuilder();
     StreamSubscription subscription;
     if (sender) {
       socketStream._connectionsA++;
@@ -191,6 +192,12 @@ class SocketConnector {
       } else {
         socketStream._socketA = socket;
       }
+
+      // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
+      // and set it to true only when the authentication completes and the authenticator says that it is a authenticated client
+      if (socketAuthenticator != null) {
+        socketStream.isAuthenticatedSocketA = false;
+      }
     } else {
       socketStream._connectionsB++;
       // If another connection is detected close it
@@ -199,89 +206,61 @@ class SocketConnector {
       } else {
         socketStream._socketB = socket;
       }
+
+      // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
+      // and set it to true only when the authentication completes and the authenticator says that it is a authenticated client
+      if (socketAuthenticator != null) {
+        socketStream.isAuthenticatedSocketB = false;
+      }
     }
+
+    // Defulats to true.
+    // Only time this can become false is when the client needs to be authenticated and it fails the authentication.
+    bool isAuthenticatedClient = true;
+
+    // false by default set to true when socketAuthenticator is supplied and it is done with authenticating the client connecting on the socket.
+    // isAuthenticationComplete becomes true, irrespective of a client authenticating itself successfully or not
+    bool isAuthenticationComplete = false;
 
     // listen for events from the client
     subscription = socket.listen(
       // handle data from the client
       (Uint8List data) async {
-        if (sender) {
-          if (socketAuthenticator != null) {
-            try {
-              bool authenticationComplete = false;
-              Uint8List? unusedData;
-              do {
-                (authenticationComplete, unusedData) = socketAuthenticator
-                    .onData(data, socket);
-              } while (!authenticationComplete);
+        // Authenticate the client when the socketAuthenticator is supplied
+        // Dont authenticate again, when the authenticate is complete and the client is valid
+        if (socketAuthenticator != null && !isAuthenticationComplete) {
+          (isAuthenticationComplete, isAuthenticatedClient) =
+              _completeAuthentication(socket, data, socketAuthenticator);
 
-              if (unusedData != null) {
-                data = unusedData;
-              } else {
-                return;
-              }
-            } catch (e) {
-              // authentication has failed. Destroy the socket.
-              stderr.writeln('Error during socket authentication: $e');
-              socket.destroy();
-              if (sender) {
-                socketStream._connectionsA--;
-              } else {
-                socket.destroy();
-                socketStream._connectionsB--;
-              }
+          if(isAuthenticationComplete) {
+            if (sender) {
+              socketStream.isAuthenticatedSocketA = isAuthenticatedClient;
+            } else {
+              socketStream.isAuthenticatedSocketB = isAuthenticatedClient;
             }
           }
-          // If verbose flag set print contents that are printable
-          if (verbose) {
-            final message = String.fromCharCodes(data);
-            print(chalk.brightGreen(
-                'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+
+          // If the authentication is complete and the client is not authenticated then destroy the socket
+          if (!isAuthenticatedClient && isAuthenticationComplete) {
+            _destroySocket(socket, sender, socketStream);
           }
-          if (socketStream._socketB == null) {
-            buffer.add(data);
-          } else {
-            buffer.add(data);
-            data = buffer.takeBytes();
-            try {
-              socketStream._socketB?.add(data);
-            } catch (e) {
-              stderr.write('Receiver Socket error : ${e.toString()}');
-            }
-            buffer.clear();
-          }
+
+          // Return to ensure that the data is not processed before or immediately after the authentication
+          return;
+        }
+
+
+        if (sender) {
+          _handleDataFromSender(data, socketStream, verbose);
         } else {
-          // If verbose flag set print contents that are printable
-          if (verbose) {
-            final message = String.fromCharCodes(data);
-            print(chalk.brightRed(
-                'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-          }
-          if (socketStream._socketA == null) {
-            buffer.add(data);
-          } else {
-            buffer.add(data);
-            data = buffer.takeBytes();
-            try {
-              socketStream._socketA?.add(data);
-            } catch (e) {
-              stderr.write('Receiver Socket error : ${e.toString()}');
-            }
-            buffer.clear();
-          }
+          _handleDataFromReceiver(data, socketStream, verbose);
         }
       },
 
       // handle errors
       onError: (error) {
         stderr.writeln('Error: $error');
-        socket.destroy();
-        if (sender) {
-          socketStream._connectionsA--;
-        } else {
-          socket.destroy();
-          socketStream._connectionsB--;
-        }
+        _destroySocket(socket, sender, socketStream);
       },
 
       // handle the client closing the connection
@@ -308,5 +287,88 @@ class SocketConnector {
       },
     );
     return (subscription);
+  }
+
+  static _writeData(Uint8List data, Socket? otherSocket) {
+    var buffer = BytesBuilder();
+
+    if (otherSocket == null) {
+      buffer.add(data);
+    } else {
+      buffer.add(data);
+      data = buffer.takeBytes();
+      try {
+        otherSocket.add(data);
+      } catch (e) {
+        stderr.write('Receiver Socket error : ${e.toString()}');
+      }
+      buffer.clear();
+    }
+  }
+
+  static _handleDataFromSender(
+      Uint8List data, final SocketConnector socketStream, final bool verbose) {
+    // If verbose flag set print contents that are printable
+    if (verbose) {
+      final message = String.fromCharCodes(data);
+      print(chalk.brightGreen(
+          'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+    }
+    // Do not send data if other end of the socket is not authenticated as yet
+    if (socketStream.isAuthenticatedSocketB == false) {
+      return;
+    }
+    _writeData(data, socketStream._socketB);
+  }
+
+  static _handleDataFromReceiver(
+      Uint8List data, final SocketConnector socketStream, final bool verbose) {
+    // If verbose flag set print contents that are printable
+    if (verbose) {
+      final message = String.fromCharCodes(data);
+      print(chalk.brightRed(
+          'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+    }
+    // Do not send data if other end of the socket is not authenticated as yet
+    if (socketStream.isAuthenticatedSocketA == false) {
+      return;
+    }
+    _writeData(data, socketStream._socketA);
+  }
+
+  static _destroySocket(final Socket socket, final bool sender,
+      final SocketConnector socketStream) {
+    socket.destroy();
+    if (sender) {
+      socketStream._connectionsA--;
+    } else {
+      socketStream._connectionsB--;
+    }
+  }
+
+  static (bool, bool) _completeAuthentication(
+      Socket socket, Uint8List data, SocketAuthenticator socketAuthenticator) {
+    bool authenticationComplete = false;
+    Uint8List? unusedData;
+    bool isAuthenticatedClient = true;
+
+    try {
+      (authenticationComplete, unusedData) =
+          socketAuthenticator.onData(data, socket);
+
+      if (unusedData != null) {
+        data = unusedData;
+      }
+
+    } catch (e) {
+      authenticationComplete = true;
+      // When authentication fails, authenticator throws an exception.
+      // This is the time to set isAuthenticatedClient to false
+      isAuthenticatedClient = false;
+      // authentication has failed. Destroy the socket.
+      stderr.writeln('Error during socket authentication: $e');
+    }
+
+    return (authenticationComplete, isAuthenticatedClient);
   }
 }
