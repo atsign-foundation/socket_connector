@@ -25,8 +25,8 @@ class SocketConnector {
   Socket? _socketB;
   int _connectionsA = 0;
   int _connectionsB = 0;
-  bool isAuthenticatedSocketA = false;
-  bool isAuthenticatedSocketB = false;
+  bool isAuthenticatedSocketA = true;
+  bool isAuthenticatedSocketB = true;
 
   SocketConnector(this._socketB, this._socketA, this._connectionsB,
       this._connectionsA, this._serverSocketB, this._serverSocketA);
