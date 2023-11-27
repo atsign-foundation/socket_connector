@@ -14,8 +14,9 @@ abstract class SocketAuthenticator {
   /// if it expects more data, since the caller is listening to the
   /// socket's data stream.
   ///
-  /// If returns authenticated == true, then authentication has been successful
-  (bool authenticated, Uint8List? unused) onData(Uint8List data, Socket socket);
+  /// If returns authenticated == true, then authentication is complete
+  /// irrespective of a client of being a authenticated client or not.
+  Future<(bool authenticated, Uint8List? unused)> onData(Uint8List data, Socket socket);
 }
 
 class SocketConnector {
@@ -230,7 +231,7 @@ class SocketConnector {
         // Dont authenticate again, when the authenticate is complete and the client is valid
         if (socketAuthenticator != null && !isAuthenticationComplete) {
           (isAuthenticationComplete, isAuthenticatedClient) =
-              _completeAuthentication(socket, data, socketAuthenticator);
+              await _completeAuthentication(socket, data, socketAuthenticator);
 
           if(isAuthenticationComplete) {
             if (sender) {
@@ -346,15 +347,15 @@ class SocketConnector {
     }
   }
 
-  static (bool, bool) _completeAuthentication(
-      Socket socket, Uint8List data, SocketAuthenticator socketAuthenticator) {
+  static Future<(bool, bool)> _completeAuthentication(
+      Socket socket, Uint8List data, SocketAuthenticator socketAuthenticator) async{
     bool authenticationComplete = false;
     Uint8List? unusedData;
     bool isAuthenticatedClient = true;
 
     try {
       (authenticationComplete, unusedData) =
-          socketAuthenticator.onData(data, socket);
+          await socketAuthenticator.onData(data, socket);
 
       if (unusedData != null) {
         data = unusedData;
@@ -369,6 +370,6 @@ class SocketConnector {
       stderr.writeln('Error during socket authentication: $e');
     }
 
-    return (authenticationComplete, isAuthenticatedClient);
+    return Future.value((authenticationComplete, isAuthenticatedClient));
   }
 }

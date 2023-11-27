@@ -88,18 +88,18 @@ onlyReceiverAuthenticated() async{
 
 class GoSocketAuthenticator implements SocketAuthenticator {
   @override
-  (bool authenticated, Uint8List? unused) onData(
+  Future<(bool authenticated, Uint8List? unused)> onData(
       Uint8List data, Socket socket) {
     final message = String.fromCharCodes(data);
 
     if (message.startsWith("go")) {
-      return (true, null);
+      return Future.value((true, null));
     }
 
     if (message.startsWith("dontgo")) {
       throw Exception('Dont want to go');
     }
 
-    return (false, null);
+    return Future.value((false, null));
   }
 }
