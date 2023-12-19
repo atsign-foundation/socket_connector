@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:chalkdart/chalk.dart';
 
-abstract class SocketAuthenticator {
+abstract class SocketAuthVerifier {
   /// Is passed data which has been received on the socket.
   ///
   /// - If authentication cannot complete (needs more data) then
@@ -74,8 +74,8 @@ class SocketConnector {
     int? serverPortA,
     int? serverPortB,
     bool? verbose,
-    SocketAuthenticator? socketAuthenticatorA,
-    SocketAuthenticator? socketAuthenticatorB,
+    SocketAuthVerifier? socketAuthVerifierA,
+    SocketAuthVerifier? socketAuthVerifierB,
   }) async {
     InternetAddress senderBindAddress;
     InternetAddress receiverBindAddress;
@@ -103,13 +103,13 @@ class SocketConnector {
       sender,
     ) {
       _handleSingleConnection(sender, true, socketStream, verbose!,
-          socketAuthenticator: socketAuthenticatorA);
+          socketAuthVerifier: socketAuthVerifierA);
     });
 
     // listen for receiver connections to the server
     socketStream._serverSocketB?.listen((receiver) {
       _handleSingleConnection(receiver, false, socketStream, verbose!,
-          socketAuthenticator: socketAuthenticatorB);
+          socketAuthVerifier: socketAuthVerifierB);
     });
 
     return (socketStream);
@@ -183,7 +183,7 @@ class SocketConnector {
 
   static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
       final bool sender, final SocketConnector socketStream, final bool verbose,
-      {SocketAuthenticator? socketAuthenticator}) async {
+      {SocketAuthVerifier? socketAuthVerifier}) async {
     StreamSubscription subscription;
     if (sender) {
       socketStream._connectionsA++;
@@ -196,7 +196,7 @@ class SocketConnector {
 
       // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
       // and set it to true only when the authentication completes and the authenticator says that it is a authenticated client
-      if (socketAuthenticator != null) {
+      if (socketAuthVerifier != null) {
         socketStream.isAuthenticatedSocketA = false;
       }
     } else {
@@ -210,7 +210,7 @@ class SocketConnector {
 
       // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
       // and set it to true only when the authentication completes and the authenticator says that it is a authenticated client
-      if (socketAuthenticator != null) {
+      if (socketAuthVerifier != null) {
         socketStream.isAuthenticatedSocketB = false;
       }
     }
@@ -229,9 +229,9 @@ class SocketConnector {
       (Uint8List data) async {
         // Authenticate the client when the socketAuthenticator is supplied
         // Dont authenticate again, when the authenticate is complete and the client is valid
-        if (socketAuthenticator != null && !isAuthenticationComplete) {
+        if (socketAuthVerifier != null && !isAuthenticationComplete) {
           (isAuthenticationComplete, isAuthenticatedClient) =
-              _completeAuthentication(socket, data, socketAuthenticator);
+              _completeAuthentication(socket, data, socketAuthVerifier);
 
           if(isAuthenticationComplete) {
             if (sender) {
@@ -348,14 +348,14 @@ class SocketConnector {
   }
 
   static (bool, bool) _completeAuthentication(
-      Socket socket, Uint8List data, SocketAuthenticator socketAuthenticator) {
+      Socket socket, Uint8List data, SocketAuthVerifier socketAuthVerifier) {
     bool authenticationComplete = false;
     Uint8List? unusedData;
     bool isAuthenticatedClient = true;
 
     try {
       (authenticationComplete, unusedData) =
-          socketAuthenticator.onData(data, socket);
+          socketAuthVerifier.onData(data, socket);
 
       if (unusedData != null) {
         data = unusedData;

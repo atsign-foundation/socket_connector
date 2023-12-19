@@ -38,8 +38,8 @@ noSideAuthenticated() async {
   SocketConnector socketStream = await SocketConnector.serverToServer(
       serverAddressA: InternetAddress.anyIPv4,
       serverAddressB: InternetAddress.anyIPv4,
-      serverPortA: 9000,
-      serverPortB: 8000,
+      serverPortA: 9001,
+      serverPortB: 8001,
       verbose: true);
 
   print(
@@ -53,8 +53,8 @@ bothSidesAuthenticated() async{
       serverPortA: 9000,
       serverPortB: 8000,
       verbose: true,
-      socketAuthenticatorA: GoSocketAuthenticator(),
-      socketAuthenticatorB: GoSocketAuthenticator());
+      socketAuthVerifierA: GoSocketAuthenticatorVerifier(),
+      socketAuthVerifierB: GoSocketAuthenticatorVerifier());
 
   print(
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
@@ -67,7 +67,7 @@ onlySenderAuthenticated() async{
       serverPortA: 9000,
       serverPortB: 8000,
       verbose: true,
-      socketAuthenticatorA: GoSocketAuthenticator());
+      socketAuthVerifierA: GoSocketAuthenticatorVerifier());
 
   print(
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
@@ -80,13 +80,13 @@ onlyReceiverAuthenticated() async{
       serverPortA: 9000,
       serverPortB: 8000,
       verbose: true,
-      socketAuthenticatorB: GoSocketAuthenticator());
+      socketAuthVerifierB: GoSocketAuthenticatorVerifier());
 
   print(
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
 }
 
-class GoSocketAuthenticator implements SocketAuthenticator {
+class GoSocketAuthenticatorVerifier implements SocketAuthVerifier {
   @override
   (bool authenticated, Uint8List? unused) onData(
       Uint8List data, Socket socket) {
