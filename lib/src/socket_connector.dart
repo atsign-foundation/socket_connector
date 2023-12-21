@@ -22,14 +22,14 @@ abstract class SocketAuthVerifier {
 class SocketConnector {
   ServerSocket? _serverSocketA;
   ServerSocket? _serverSocketB;
-  Socket? _socketA;
-  Socket? _socketB;
+  Socket? socketA;
+  Socket? socketB;
   int _connectionsA = 0;
   int _connectionsB = 0;
   bool isAuthenticatedSocketA = true;
   bool isAuthenticatedSocketB = true;
 
-  SocketConnector(this._socketB, this._socketA, this._connectionsB,
+  SocketConnector(this.socketB, this.socketA, this._connectionsB,
       this._connectionsA, this._serverSocketB, this._serverSocketA);
 
   /// Returns the TCP port number of the sender socket
@@ -48,21 +48,21 @@ class SocketConnector {
     bool closed = false;
     await Future.delayed(Duration(seconds: 30));
     if ((_connectionsA == 0) || (_connectionsB == 0)) {
-      _socketA?.destroy();
-      _socketB?.destroy();
+      socketA?.destroy();
+      socketB?.destroy();
       // Some time for the IP stack to destroy
       await Future.delayed(Duration(seconds: 3));
     }
 
-    if ((_socketA == null) || (_socketB == null)) {
+    if ((socketA == null) || (socketB == null)) {
       closed = true;
     }
     return (closed);
   }
 
   void close() {
-    _socketA?.destroy();
-    _socketB?.destroy();
+    socketA?.destroy();
+    socketB?.destroy();
   }
 
   /// Binds two Server sockets on specified Internet Addresses.
@@ -136,7 +136,7 @@ class SocketConnector {
         SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
-    socketStream._socketA = await Socket.connect(socketAddress, socketPort);
+    socketStream.socketA = await Socket.connect(socketAddress, socketPort);
 
     // bind the socket server to an address and port
     socketStream._serverSocketB =
@@ -144,7 +144,7 @@ class SocketConnector {
 
     // listen for sender connections to the server
     _handleSingleConnection(
-        socketStream._socketA!, true, socketStream, verbose);
+        socketStream.socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     socketStream._serverSocketB?.listen((receiver) {
       _handleSingleConnection(receiver, false, socketStream, verbose!);
@@ -166,17 +166,17 @@ class SocketConnector {
         SocketConnector(null, null, 0, 0, null, null);
 
     // connect socket server to an address and port
-    socketStream._socketA = await Socket.connect(socketAddressA, socketPortA);
+    socketStream.socketA = await Socket.connect(socketAddressA, socketPortA);
 
     // connect socket server to an address and port
-    socketStream._socketB = await Socket.connect(socketAddressB, socketPortB);
+    socketStream.socketB = await Socket.connect(socketAddressB, socketPortB);
 
     // listen for sender connections to the server
     _handleSingleConnection(
-        socketStream._socketA!, true, socketStream, verbose);
+        socketStream.socketA!, true, socketStream, verbose);
     // listen for receiver connections to the server
     _handleSingleConnection(
-        socketStream._socketB!, false, socketStream, verbose);
+        socketStream.socketB!, false, socketStream, verbose);
 
     return (socketStream);
   }
@@ -191,7 +191,7 @@ class SocketConnector {
       if (socketStream._connectionsA > 1) {
         socket.destroy();
       } else {
-        socketStream._socketA = socket;
+        socketStream.socketA = socket;
       }
 
       // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
@@ -205,7 +205,7 @@ class SocketConnector {
       if (socketStream._connectionsB > 1) {
         socket.destroy();
       } else {
-        socketStream._socketB = socket;
+        socketStream.socketB = socket;
       }
 
       // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
@@ -269,18 +269,18 @@ class SocketConnector {
         if (sender) {
           socketStream._connectionsA--;
           if (socketStream._connectionsA == 0) {
-            socketStream._socketB?.destroy();
-            socketStream._socketB = null;
-            socketStream._socketA = null;
+            socketStream.socketB?.destroy();
+            socketStream.socketB = null;
+            socketStream.socketA = null;
             socketStream._serverSocketA?.close();
             socketStream._serverSocketB?.close();
           }
         } else {
           socketStream._connectionsB--;
           if (socketStream._connectionsB == 0) {
-            socketStream._socketA?.destroy();
-            socketStream._socketB = null;
-            socketStream._socketA = null;
+            socketStream.socketA?.destroy();
+            socketStream.socketB = null;
+            socketStream.socketA = null;
             socketStream._serverSocketA?.close();
             socketStream._serverSocketB?.close();
           }
@@ -319,7 +319,7 @@ class SocketConnector {
     if (socketStream.isAuthenticatedSocketB == false) {
       return;
     }
-    _writeData(data, socketStream._socketB);
+    _writeData(data, socketStream.socketB);
   }
 
   static _handleDataFromReceiver(
@@ -334,7 +334,7 @@ class SocketConnector {
     if (socketStream.isAuthenticatedSocketA == false) {
       return;
     }
-    _writeData(data, socketStream._socketA);
+    _writeData(data, socketStream.socketA);
   }
 
   static _destroySocket(final Socket socket, final bool sender,
