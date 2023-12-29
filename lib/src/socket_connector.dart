@@ -26,8 +26,8 @@ class SocketConnector {
   ServerSocket? _serverSocketB;
   Socket? socketA;
   Socket? socketB;
-  IOSink? sinkA;
-  IOSink? sinkB;
+  StreamSink<List<int>>? sinkA;
+  StreamSink<List<int>>? sinkB;
   int _connectionsA = 0;
   int _connectionsB = 0;
   bool isAuthenticatedSocketA = true;
@@ -258,7 +258,14 @@ class SocketConnector {
         // TODO This should be set ONLY once the socket has authenticated
         // TODO (or if there is no SocketAuthVerifier)
         connector.socketA = socket;
-        connector.sinkA = socket;
+        if (transformer == null) {
+          connector.sinkA = socket;
+        } else {
+          StreamController<Uint8List> sc = StreamController<Uint8List>();
+          connector.sinkA = sc; // _writeData will write to this - i.e. add to the stream
+          Stream<List<int>> transformed = transformer(sc.stream);
+          transformed.listen(connector.socketA!.add);
+        }
       }
     } else {
       connector._connectionsB++;
@@ -269,7 +276,14 @@ class SocketConnector {
         socket.destroy();
       } else {
         connector.socketB = socket;
-        connector.sinkB = socket;
+        if (transformer == null) {
+          connector.sinkB = socket;
+        } else {
+          StreamController<Uint8List> sc = StreamController<Uint8List>();
+          connector.sinkB = sc; // _writeData will write to this - i.e. add to the stream
+          Stream<List<int>> transformed = transformer(sc.stream);
+          transformed.listen(connector.socketB!.add);
+        }
       }
     }
 
@@ -371,7 +385,7 @@ class SocketConnector {
   }
 
   static _writeData(SocketConnector connector, bool sender, Uint8List data) {
-    late IOSink? sink;
+    late StreamSink? sink;
     late bool otherSocketIsAuthenticated;
     late BytesBuilder buffer;
 
