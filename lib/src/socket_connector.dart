@@ -28,6 +28,8 @@ class SocketConnector {
   int _connectionsB = 0;
   bool isAuthenticatedSocketA = true;
   bool isAuthenticatedSocketB = true;
+  BytesBuilder bufferA = BytesBuilder();
+  BytesBuilder bufferB = BytesBuilder();
 
   SocketConnector(this.socketB, this.socketA, this._connectionsB,
       this._connectionsA, this._serverSocketB, this._serverSocketA);
@@ -73,7 +75,7 @@ class SocketConnector {
     InternetAddress? serverAddressB,
     int? serverPortA,
     int? serverPortB,
-    bool? verbose,
+    bool verbose = false,
     SocketAuthVerifier? socketAuthVerifierA,
     SocketAuthVerifier? socketAuthVerifierB,
   }) async {
@@ -81,7 +83,6 @@ class SocketConnector {
     InternetAddress receiverBindAddress;
     serverPortA ??= 0;
     serverPortB ??= 0;
-    verbose ??= false;
     serverAddressA ??= InternetAddress.anyIPv4;
     serverAddressB ??= InternetAddress.anyIPv4;
 
@@ -98,17 +99,27 @@ class SocketConnector {
     socketStream._serverSocketB =
         await ServerSocket.bind(receiverBindAddress, serverPortB);
 
+    // If we are authenticating sockets, then the authenticated flags will be
+    // set to true only when authentication completes with authenticated=true
+    if (socketAuthVerifierA != null) {
+      socketStream.isAuthenticatedSocketA = false;
+    }
+    if (socketAuthVerifierB != null) {
+      socketStream.isAuthenticatedSocketB = false;
+    }
     // listen for sender connections to the server
-    socketStream._serverSocketA?.listen((
-      sender,
+    socketStream._serverSocketA!.listen((
+      senderSocket,
     ) {
-      _handleSingleConnection(sender, true, socketStream, verbose!,
+      print('Connection on serverSocketA: ${socketStream._serverSocketA!.port}');
+      _handleSingleConnection(senderSocket, true, socketStream, verbose,
           socketAuthVerifier: socketAuthVerifierA);
     });
 
     // listen for receiver connections to the server
-    socketStream._serverSocketB?.listen((receiver) {
-      _handleSingleConnection(receiver, false, socketStream, verbose!,
+    socketStream._serverSocketB!.listen((receiverSocket) {
+      print('Connection on serverSocketB: ${socketStream._serverSocketB!.port}');
+      _handleSingleConnection(receiverSocket, false, socketStream, verbose,
           socketAuthVerifier: socketAuthVerifierB);
     });
 
@@ -181,41 +192,73 @@ class SocketConnector {
     return (socketStream);
   }
 
+  /// Binds to [serverPort] on the loopback interface (127.0.0.1)
+  ///
+  /// Listens for a socket connection on that
+  /// port and joins it to a socket connection to [receiverSocketPort]
+  /// on [receiverSocketAddress]
+  ///
+  /// If [serverPort] is not provided then a port is chosen by the OS.
+  ///
+  static Future<SocketConnector> serverToSocket(
+      {required InternetAddress receiverSocketAddress,
+        required int receiverSocketPort,
+        int localServerPort = 0,
+        bool verbose = false}) async {
+    SocketConnector socketStream =
+    SocketConnector(null, null, 0, 0, null, null);
+
+    // bind to a local port to which 'senders' will connect
+    socketStream._serverSocketA =
+    await ServerSocket.bind(InternetAddress('127.0.0.1'), localServerPort);
+
+    // connect to the receiver address and port
+    socketStream.socketB = await Socket.connect(receiverSocketAddress, receiverSocketPort);
+
+    // listen on the local port and connect the inbound socket (the 'sender')
+    socketStream._serverSocketA?.listen((sender) {
+      _handleSingleConnection(sender, true, socketStream, verbose);
+    });
+
+    // connect the outbound socket (the receiver)
+    _handleSingleConnection(
+        socketStream.socketB!, false, socketStream, verbose);
+
+    return (socketStream);
+  }
+
   static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
       final bool sender, final SocketConnector socketStream, final bool verbose,
       {SocketAuthVerifier? socketAuthVerifier}) async {
+    print (' ***** _handleSingleConnection: socketAuthVerifier $socketAuthVerifier for ${sender ? 'SENDER' : 'RECEIVER'}');
     StreamSubscription subscription;
     if (sender) {
+      // TODO This should be incremented ONLY once the socket has authenticated
+      // TODO (or if there is no SocketAuthVerifier)
       socketStream._connectionsA++;
       // If another connection is detected close it
       if (socketStream._connectionsA > 1) {
+        print(chalk.brightBlue('Closing this socket'));
+        // TODO need to decrement connectionsA here. Call _destroySocket instead
         socket.destroy();
       } else {
+        // TODO This should be set ONLY once the socket has authenticated
+        // TODO (or if there is no SocketAuthVerifier)
         socketStream.socketA = socket;
-      }
-
-      // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
-      // and set it to true only when the authentication completes and the authenticator says that it is a authenticated client
-      if (socketAuthVerifier != null) {
-        socketStream.isAuthenticatedSocketA = false;
       }
     } else {
       socketStream._connectionsB++;
       // If another connection is detected close it
       if (socketStream._connectionsB > 1) {
+        print(chalk.brightBlue('Closing this socket'));
+        // TODO need to decrement connectionsB here. Call _destroySocket instead
         socket.destroy();
       } else {
         socketStream.socketB = socket;
       }
-
-      // Given that we have a socketAuthenticator supplied, we will set isAuthenticatedSocketA to false
-      // and set it to true only when the authentication completes and the authenticator says that it is a authenticated client
-      if (socketAuthVerifier != null) {
-        socketStream.isAuthenticatedSocketB = false;
-      }
     }
 
-    // Defulats to true.
+    // Defaults to true.
     // Only time this can become false is when the client needs to be authenticated and it fails the authentication.
     bool isAuthenticatedClient = true;
 
@@ -227,27 +270,45 @@ class SocketConnector {
     subscription = socket.listen(
       // handle data from the client
       (Uint8List data) async {
+        stderr.writeln(chalk.brightBlue('Received data (${data.length} bytes) from ${sender ? 'SENDER' : 'RECEIVER'}'));
+        Uint8List? unusedData;
         // Authenticate the client when the socketAuthenticator is supplied
         // Dont authenticate again, when the authenticate is complete and the client is valid
         if (socketAuthVerifier != null && !isAuthenticationComplete) {
-          (isAuthenticationComplete, isAuthenticatedClient) =
+          print('\n\n*** Calling _completeAuthentication ***\n\n');
+          (isAuthenticationComplete, isAuthenticatedClient, unusedData) =
               _completeAuthentication(socket, data, socketAuthVerifier);
 
           if(isAuthenticationComplete) {
             if (sender) {
               socketStream.isAuthenticatedSocketA = isAuthenticatedClient;
+              if (isAuthenticatedClient) {
+                // Process any data which has been buffered up for this socket
+                stderr.writeln(chalk.brightBlue('Clearing buffered data from receiver (${socketStream.bufferA.length}) bytes)'));
+                _writeData(sender, Uint8List(0), socketStream.socketA!, socketStream.isAuthenticatedSocketA, socketStream.bufferA);
+              }
             } else {
               socketStream.isAuthenticatedSocketB = isAuthenticatedClient;
+              if (isAuthenticatedClient) {
+                // Process any data which has been buffered up for this socket
+                stderr.writeln(chalk.brightBlue('Clearing buffered data from sender (${socketStream.bufferB.length}) bytes)'));
+                _writeData(sender, Uint8List(0), socketStream.socketB!, socketStream.isAuthenticatedSocketB, socketStream.bufferB);
+              }
             }
           }
 
-          // If the authentication is complete and the client is not authenticated then destroy the socket
+          // If the authentication is complete and the client has not
+          // been authenticated, then destroy the socket
           if (!isAuthenticatedClient && isAuthenticationComplete) {
             _destroySocket(socket, sender, socketStream);
+            return;
           }
 
-          // Return to ensure that the data is not processed before or immediately after the authentication
-          return;
+          if (unusedData == null) {
+            return; // nothing more to do
+          } else {
+            data = unusedData; // any unusedData should be processed as normal
+          }
         }
 
 
@@ -290,10 +351,14 @@ class SocketConnector {
     return (subscription);
   }
 
-  static _writeData(Uint8List data, Socket? otherSocket) {
-    var buffer = BytesBuilder();
-
-    if (otherSocket == null) {
+  static _writeData(bool sender, Uint8List data, Socket? otherSocket, bool otherSocketIsAuthenticated, BytesBuilder buffer) {
+    stderr.write('Writing data ');
+    if (sender) {
+      stderr.writeln('From Sender (A) to Receiver (B)');
+    } else {
+      stderr.writeln('From Receiver (B) to Sender (A)');
+    }
+    if (otherSocket == null || !otherSocketIsAuthenticated) {
       buffer.add(data);
     } else {
       buffer.add(data);
@@ -301,7 +366,7 @@ class SocketConnector {
       try {
         otherSocket.add(data);
       } catch (e) {
-        stderr.write('Receiver Socket error : ${e.toString()}');
+        stderr.write('Socket error : ${e.toString()}');
       }
       buffer.clear();
     }
@@ -312,14 +377,12 @@ class SocketConnector {
     // If verbose flag set print contents that are printable
     if (verbose) {
       final message = String.fromCharCodes(data);
+      final receiverAuthenticated = socketStream.isAuthenticatedSocketB ? 'authenticated' : 'NOT YET authenticated';
       print(chalk.brightGreen(
-          'Sender:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+          'Sender:(receiver is $receiverAuthenticated):${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
     }
-    // Do not send data if other end of the socket is not authenticated as yet
-    if (socketStream.isAuthenticatedSocketB == false) {
-      return;
-    }
-    _writeData(data, socketStream.socketB);
+
+    _writeData(true, data, socketStream.socketB, socketStream.isAuthenticatedSocketB, socketStream.bufferB);
   }
 
   static _handleDataFromReceiver(
@@ -327,27 +390,27 @@ class SocketConnector {
     // If verbose flag set print contents that are printable
     if (verbose) {
       final message = String.fromCharCodes(data);
+      final senderAuthenticated = socketStream.isAuthenticatedSocketA ? 'authenticated' : 'NOT YET authenticated';
       print(chalk.brightRed(
-          'Receiver:${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+          'Receiver:(sender is $senderAuthenticated):${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
     }
-    // Do not send data if other end of the socket is not authenticated as yet
-    if (socketStream.isAuthenticatedSocketA == false) {
-      return;
-    }
-    _writeData(data, socketStream.socketA);
+
+    _writeData(false, data, socketStream.socketA, socketStream.isAuthenticatedSocketA, socketStream.bufferA);
   }
 
   static _destroySocket(final Socket socket, final bool sender,
       final SocketConnector socketStream) {
     socket.destroy();
     if (sender) {
+      print(chalk.brightBlue('Closing sender socket'));
       socketStream._connectionsA--;
     } else {
+      print(chalk.brightBlue('Closing receiver socket'));
       socketStream._connectionsB--;
     }
   }
 
-  static (bool, bool) _completeAuthentication(
+  static (bool, bool, Uint8List?) _completeAuthentication(
       Socket socket, Uint8List data, SocketAuthVerifier socketAuthVerifier) {
     bool authenticationComplete = false;
     Uint8List? unusedData;
@@ -356,11 +419,6 @@ class SocketConnector {
     try {
       (authenticationComplete, unusedData) =
           socketAuthVerifier.onData(data, socket);
-
-      if (unusedData != null) {
-        data = unusedData;
-      }
-
     } catch (e) {
       authenticationComplete = true;
       // When authentication fails, authenticator throws an exception.
@@ -370,6 +428,6 @@ class SocketConnector {
       stderr.writeln('Error during socket authentication: $e');
     }
 
-    return (authenticationComplete, isAuthenticatedClient);
+    return (authenticationComplete, isAuthenticatedClient, unusedData);
   }
 }
