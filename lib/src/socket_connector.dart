@@ -299,7 +299,10 @@ class SocketConnector {
     subscription = socket.listen(
       // handle data from the client
       (Uint8List data) async {
-        stderr.writeln(chalk.brightBlue('Received data (${data.length} bytes) from ${sender ? 'SENDER' : 'RECEIVER'}'));
+        if (verbose) {
+          stderr.writeln(chalk.brightBlue(
+              'Received data (${data.length} bytes) from ${sender ? 'SENDER' : 'RECEIVER'}'));
+        }
         Uint8List? unusedData;
         // Authenticate the client when the socketAuthenticator is supplied
         // Dont authenticate again, when the authenticate is complete and the client is valid
@@ -313,18 +316,20 @@ class SocketConnector {
               connector.isAuthenticatedSocketA = isAuthenticatedClient;
               if (isAuthenticatedClient) {
                 // Process any data which has been buffered up for this socket
-                stderr.writeln(chalk.brightBlue(
-                    'Flushing buffered data from receiver (${connector.bufferA
-                        .length}) bytes)'));
+                if (verbose) {
+                  stderr.writeln(chalk.brightBlue(
+                      'Flushing buffered data from B to A (${connector.bufferA.length}) bytes)'));
+                }
                 _writeData(connector, !sender, Uint8List(0));
               }
             } else {
               connector.isAuthenticatedSocketB = isAuthenticatedClient;
               if (isAuthenticatedClient) {
                 // Process any data which has been buffered up for this socket
-                stderr.writeln(chalk.brightBlue(
-                    'Flushing buffered data from sender (${connector.bufferB
-                        .length}) bytes)'));
+                if (verbose) {
+                  stderr.writeln(chalk.brightBlue(
+                      'Flushing buffered data from A to B (${connector.bufferB.length}) bytes)'));
+                }
                 _writeData(connector, !sender, Uint8List(0));
               }
             }
@@ -404,12 +409,6 @@ class SocketConnector {
     } else {
       buffer.add(data);
       data = buffer.takeBytes();
-      stderr.write('Writing data (${data.length} bytes ');
-      if (sender) {
-        stderr.writeln('from Sender (A) to Receiver (B)');
-      } else {
-        stderr.writeln('from Receiver (B) to Sender (A)');
-      }
       try {
         sink.add(data);
       } catch (e) {
