@@ -115,14 +115,16 @@ class SocketConnector {
     socketStream._serverSocketA!.listen((
       senderSocket,
     ) {
-      print('Connection on serverSocketA: ${socketStream._serverSocketA!.port}');
+      print(
+          'Connection on serverSocketA: ${socketStream._serverSocketA!.port}');
       _handleSingleConnection(senderSocket, true, socketStream, verbose,
           socketAuthVerifier: socketAuthVerifierA);
     });
 
     // listen for receiver connections to the server
     socketStream._serverSocketB!.listen((receiverSocket) {
-      print('Connection on serverSocketB: ${socketStream._serverSocketB!.port}');
+      print(
+          'Connection on serverSocketB: ${socketStream._serverSocketB!.port}');
       _handleSingleConnection(receiverSocket, false, socketStream, verbose,
           socketAuthVerifier: socketAuthVerifierB);
     });
@@ -242,8 +244,10 @@ class SocketConnector {
 
   static Future<StreamSubscription> _handleSingleConnection(final Socket socket,
       final bool sender, final SocketConnector connector, final bool verbose,
-      {SocketAuthVerifier? socketAuthVerifier, DataTransformer? transformer}) async {
-    print (' ***** _handleSingleConnection: socketAuthVerifier $socketAuthVerifier for ${sender ? 'SENDER' : 'RECEIVER'}');
+      {SocketAuthVerifier? socketAuthVerifier,
+      DataTransformer? transformer}) async {
+    print(
+        ' ***** _handleSingleConnection: socketAuthVerifier $socketAuthVerifier for ${sender ? 'SENDER' : 'RECEIVER'}');
     StreamSubscription subscription;
     if (sender) {
       // TODO This should be incremented ONLY once the socket has authenticated
@@ -262,7 +266,8 @@ class SocketConnector {
           connector.sinkA = socket;
         } else {
           StreamController<Uint8List> sc = StreamController<Uint8List>();
-          connector.sinkA = sc; // _writeData will write to this - i.e. add to the stream
+          connector.sinkA =
+              sc; // _writeData will write to this - i.e. add to the stream
           Stream<List<int>> transformed = transformer(sc.stream);
           transformed.listen(connector.socketA!.add);
         }
@@ -280,7 +285,8 @@ class SocketConnector {
           connector.sinkB = socket;
         } else {
           StreamController<Uint8List> sc = StreamController<Uint8List>();
-          connector.sinkB = sc; // _writeData will write to this - i.e. add to the stream
+          connector.sinkB =
+              sc; // _writeData will write to this - i.e. add to the stream
           Stream<List<int>> transformed = transformer(sc.stream);
           transformed.listen(connector.socketB!.add);
         }
@@ -348,7 +354,6 @@ class SocketConnector {
             data = unusedData; // any unusedData should be processed as normal
           }
         }
-
 
         if (sender) {
           _handleDataFromSender(data, connector, verbose);

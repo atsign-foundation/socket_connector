@@ -46,7 +46,7 @@ noSideAuthenticated() async {
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
 }
 
-bothSidesAuthenticated() async{
+bothSidesAuthenticated() async {
   SocketConnector socketStream = await SocketConnector.serverToServer(
       serverAddressA: InternetAddress.anyIPv4,
       serverAddressB: InternetAddress.anyIPv4,
@@ -60,7 +60,7 @@ bothSidesAuthenticated() async{
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
 }
 
-onlySenderAuthenticated() async{
+onlySenderAuthenticated() async {
   SocketConnector socketStream = await SocketConnector.serverToServer(
       serverAddressA: InternetAddress.anyIPv4,
       serverAddressB: InternetAddress.anyIPv4,
@@ -73,7 +73,7 @@ onlySenderAuthenticated() async{
       'Sender Port: ${socketStream.senderPort().toString()}  Receiver Port: ${socketStream.receiverPort().toString()}');
 }
 
-onlyReceiverAuthenticated() async{
+onlyReceiverAuthenticated() async {
   SocketConnector socketStream = await SocketConnector.serverToServer(
       serverAddressA: InternetAddress.anyIPv4,
       serverAddressB: InternetAddress.anyIPv4,

@@ -1,3 +1,10 @@
+## 1.1.0
+- Added support for requiring client sockets to be authenticated in some 
+  app-defined way before they will be connected to the other side
+- Added support for app-defined data transformers which can be used to 
+  transform the data while sending from A to B, and vice versa. Useful for
+  adding traffic encryption, for example.
+
 ## 1.0.11
 - Added close function to SocketConnector
 
