@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -88,18 +89,27 @@ onlyReceiverAuthenticated() async {
 
 class GoSocketAuthenticatorVerifier implements SocketAuthVerifier {
   @override
-  (bool authenticated, Uint8List? unused) onData(
-      Uint8List data, Socket socket) {
-    final message = String.fromCharCodes(data);
+  Future<(bool, Stream<Uint8List>?)> authenticate(Socket socket) async {
+    Completer<(bool, Stream<Uint8List>?)> completer = Completer();
+    bool authenticated = false;
+    StreamController<Uint8List> sc = StreamController();
+    socket.listen((Uint8List data) {
+      if (authenticated) {
+        sc.add(data);
+      } else {
+        final message = String.fromCharCodes(data);
 
-    if (message.startsWith("go")) {
-      return (true, null);
-    }
+        if (message.startsWith("go")) {
+          authenticated = true;
+          completer.complete((true, sc.stream));
+        }
 
-    if (message.startsWith("dontgo")) {
-      throw Exception('Dont want to go');
-    }
-
-    return (false, null);
+        if (message.startsWith("dontgo")) {
+          authenticated = false;
+          completer.complete((false, null));
+        }
+      }
+    });
+    return completer.future;
   }
 }
