@@ -239,8 +239,10 @@ class SocketConnector {
   Future<void> _handleSingleConnection(final ConnectionSide side, final bool verbose,
       {SocketAuthVerifier? socketAuthVerifier,
       DataTransformer? transformer}) async {
-    print(
-        ' ***** _handleSingleConnection: socketAuthVerifier $socketAuthVerifier for ${side.sender ? 'SENDER' : 'RECEIVER'}');
+    stderr.writeln(
+        ' ***** _handleSingleConnection (INSTANCE):'
+            ' socketAuthVerifier $socketAuthVerifier'
+            ' for ${side.sender ? 'SENDER' : 'RECEIVER'}');
 
     unawaited(side.socket.done.whenComplete(() {
       stderr.writeln(
