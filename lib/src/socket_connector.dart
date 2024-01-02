@@ -236,73 +236,73 @@ class SocketConnector {
     return closedCompleter.future;
   }
 
-  Future<void> _handleSingleConnection(final ConnectionSide side, final bool verbose,
+  Future<void> _handleSingleConnection(final ConnectionSide thisSide, final bool verbose,
       {SocketAuthVerifier? socketAuthVerifier,
       DataTransformer? transformer}) async {
     stderr.writeln(
         ' _handleSingleConnection :'
             ' socketAuthVerifier $socketAuthVerifier'
-            ' for ${side.sender ? 'SENDER' : 'RECEIVER'}');
+            ' for ${thisSide.sender ? 'SENDER' : 'RECEIVER'}');
 
-    unawaited(side.socket.done.whenComplete(() {
+    unawaited(thisSide.socket.done.whenComplete(() {
       stderr.writeln(
-          'socket.done is complete on side ${side.sender ? 'A' : 'B'}');
-      _destroySide(side);
+          'socket.done is complete on side ${thisSide.sender ? 'A' : 'B'}');
+      _destroySide(thisSide);
     }));
 
-    unawaited(side.socket.done.onError((error, stackTrace) {
+    unawaited(thisSide.socket.done.onError((error, stackTrace) {
       stderr.writeln(
-          'socket.done.onError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(side);
+          'socket.done.onError on side ${thisSide.sender ? 'A' : 'B'}: $error');
+      _destroySide(thisSide);
     }));
 
-    unawaited(side.socket.done.catchError((error) {
+    unawaited(thisSide.socket.done.catchError((error) {
       stderr.writeln(
-          'socket.done.catchError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(side);
+          'socket.done.catchError on side ${thisSide.sender ? 'A' : 'B'}: $error');
+      _destroySide(thisSide);
     }));
 
-    side.socket.handleError((error) {
+    thisSide.socket.handleError((error) {
       stderr.writeln(
-          'socket.handleError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(side);
+          'socket.handleError on side ${thisSide.sender ? 'A' : 'B'}: $error');
+      _destroySide(thisSide);
     });
 
     if (socketAuthVerifier == null) {
-      side.authenticated = true;
+      thisSide.authenticated = true;
     } else {
       bool authenticated;
       Stream<Uint8List>? stream;
       try {
         (authenticated, stream) =
-            await socketAuthVerifier.authenticate(side.socket);
-        side.authenticated = authenticated;
-        if (side.authenticated) {
-          side.stream = stream!;
+            await socketAuthVerifier.authenticate(thisSide.socket);
+        thisSide.authenticated = authenticated;
+        if (thisSide.authenticated) {
+          thisSide.stream = stream!;
         }
       } catch (e) {
         stderr.writeln('Error while authenticating: $e');
-        side.authenticated = false;
+        thisSide.authenticated = false;
       }
     }
-    if (!side.authenticated) {
+    if (!thisSide.authenticated) {
       stderr
-          .writeln('Authentication failed on side ${side.sender ? 'A' : 'B'}');
-      _destroySide(side);
+          .writeln('Authentication failed on side ${thisSide.sender ? 'A' : 'B'}');
+      _destroySide(thisSide);
       return;
     }
 
-    if (side.sender) {
-      authenticatedUnpairedSenders.add(side);
+    if (thisSide.sender) {
+      authenticatedUnpairedSenders.add(thisSide);
     } else {
-      authenticatedUnpairedReceivers.add(side);
+      authenticatedUnpairedReceivers.add(thisSide);
     }
 
     if (transformer != null) {
       StreamController<Uint8List> sc = StreamController<Uint8List>();
-      side.sink = sc;
+      thisSide.sink = sc;
       Stream<List<int>> transformed = transformer(sc.stream);
-      transformed.listen(side.socket.add);
+      transformed.listen(thisSide.socket.add);
     }
 
     if (authenticatedUnpairedSenders.isNotEmpty &&
@@ -312,20 +312,19 @@ class SocketConnector {
           authenticatedUnpairedReceivers.removeAt(0));
       establishedConnections.add(c);
 
-      side.stream.listen((Uint8List data) async {
-        _onData(side, data, verbose);
-      }, onDone: () {
-        _destroySide(side);
-      }, onError: (error) {
-        _destroySide(side);
-      });
-      side.farSide!.stream.listen((Uint8List data) async {
-        _onData(side.farSide!, data, verbose);
-      }, onDone: () {
-        _destroySide(side);
-      }, onError: (error) {
-        _destroySide(side);
-      });
+      for (final s in [thisSide, thisSide.farSide!]) {
+        s.stream.listen((Uint8List data) async {
+          _onData(s, data, verbose);
+        }, onDone: () {
+          stderr.writeln(
+              'stream.onDone on side ${s.sender ? 'A' : 'B'}');
+          _destroySide(s);
+        }, onError: (error) {
+          stderr.writeln(
+              'stream.onError on side ${s.sender ? 'A' : 'B'}: $error');
+          _destroySide(s);
+        });
+      }
     }
   }
 
