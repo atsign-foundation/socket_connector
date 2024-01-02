@@ -240,32 +240,32 @@ class SocketConnector {
       {SocketAuthVerifier? socketAuthVerifier,
       DataTransformer? transformer}) async {
     stderr.writeln(
-        ' ***** _handleSingleConnection (INSTANCE):'
+        ' _handleSingleConnection :'
             ' socketAuthVerifier $socketAuthVerifier'
             ' for ${side.sender ? 'SENDER' : 'RECEIVER'}');
 
     unawaited(side.socket.done.whenComplete(() {
       stderr.writeln(
           'socket.done is complete on side ${side.sender ? 'A' : 'B'}');
-      _destroySide(this, side);
+      _destroySide(side);
     }));
 
     unawaited(side.socket.done.onError((error, stackTrace) {
       stderr.writeln(
           'socket.done.onError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(this, side);
+      _destroySide(side);
     }));
 
     unawaited(side.socket.done.catchError((error) {
       stderr.writeln(
           'socket.done.catchError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(this, side);
+      _destroySide(side);
     }));
 
     side.socket.handleError((error) {
       stderr.writeln(
           'socket.handleError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(this, side);
+      _destroySide(side);
     });
 
     if (socketAuthVerifier == null) {
@@ -288,7 +288,7 @@ class SocketConnector {
     if (!side.authenticated) {
       stderr
           .writeln('Authentication failed on side ${side.sender ? 'A' : 'B'}');
-      _destroySide(this, side);
+      _destroySide(side);
       return;
     }
 
@@ -315,16 +315,16 @@ class SocketConnector {
       side.stream.listen((Uint8List data) async {
         _onData(side, data, verbose);
       }, onDone: () {
-        _destroySide(this, side);
+        _destroySide(side);
       }, onError: (error) {
-        _destroySide(this, side);
+        _destroySide(side);
       });
       side.farSide!.stream.listen((Uint8List data) async {
         _onData(side.farSide!, data, verbose);
       }, onDone: () {
-        _destroySide(this, side);
+        _destroySide(side);
       }, onError: (error) {
-        _destroySide(this, side);
+        _destroySide(side);
       });
     }
   }
@@ -343,8 +343,7 @@ class SocketConnector {
     side.farSide!.sink.add(data);
   }
 
-  static _destroySide(
-      final SocketConnector connector, final ConnectionSide side) {
+  _destroySide(final ConnectionSide side) {
     if (side.state != SideState.open) {
       return;
     }
@@ -356,18 +355,18 @@ class SocketConnector {
       side.farSide?.socket.destroy();
 
       Connection? connectionToRemove;
-      for (final c in connector.establishedConnections) {
+      for (final c in establishedConnections) {
         if (c.sideA == side || c.sideB == side) {
           print(chalk.brightBlue('Found connection to remove'));
           connectionToRemove = c;
           break;
         }
       }
-      if (connector.establishedConnections.remove(connectionToRemove)) {
+      if (establishedConnections.remove(connectionToRemove)) {
         print(chalk.brightBlue('Removed connection'));
-        if (connector.establishedConnections.isEmpty) {
+        if (establishedConnections.isEmpty) {
           print(chalk.brightBlue('Closing connector'));
-          connector.close();
+          close();
         }
       }
     } catch (_) {
