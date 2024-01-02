@@ -24,7 +24,7 @@ class ConnectionSide {
   late StreamSink<List<int>> sink;
   bool authenticated = false;
   BytesBuilder buffer = BytesBuilder();
-  ConnectionSide? otherSide;
+  ConnectionSide? farSide;
 
   ConnectionSide(this.socket, this.sender) {
     sink = socket;
@@ -37,8 +37,8 @@ class Connection {
   final ConnectionSide sideB;
 
   Connection(this.sideA, this.sideB) {
-    sideA.otherSide = sideB;
-    sideB.otherSide = sideA;
+    sideA.farSide = sideB;
+    sideB.farSide = sideA;
   }
 }
 
@@ -308,8 +308,8 @@ class SocketConnector {
       }, onError: (error) {
         _destroySide(connector, side);
       });
-      side.otherSide!.stream.listen((Uint8List data) async {
-        _onData(side.otherSide!, data, verbose);
+      side.farSide!.stream.listen((Uint8List data) async {
+        _onData(side.farSide!, data, verbose);
       }, onDone: () {
         _destroySide(connector, side);
       }, onError: (error) {
@@ -329,7 +329,7 @@ class SocketConnector {
             'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
       }
     }
-    side.otherSide!.sink.add(data);
+    side.farSide!.sink.add(data);
   }
 
   static _destroySide(
@@ -342,7 +342,7 @@ class SocketConnector {
       print(chalk.brightBlue('Destroying side ${side.sender ? 'A' : 'B'}'));
       side.socket.destroy();
       print(chalk.brightBlue('Destroying other side socket'));
-      side.otherSide?.socket.destroy();
+      side.farSide?.socket.destroy();
 
       Connection? connectionToRemove;
       for (final c in connector.establishedConnections) {
