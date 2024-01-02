@@ -6,7 +6,9 @@ import 'package:chalkdart/chalk.dart';
 /// Typical usage is via the [serverToServer], [serverToSocket],
 /// [socketToSocket] and [socketToServer] methods.
 class SocketConnector {
-  SocketConnector();
+  SocketConnector({required this.verbose});
+
+  bool verbose;
 
   ServerSocket? _serverSocketA;
   ServerSocket? _serverSocketB;
@@ -35,8 +37,7 @@ class SocketConnector {
   }
 
   Future<void> _handleSingleConnection(
-    final ConnectionSide thisSide,
-    final bool verbose, {
+    final ConnectionSide thisSide, {
     SocketAuthVerifier? socketAuthVerifier,
     DataTransformer? transformer,
   }) async {
@@ -96,10 +97,10 @@ class SocketConnector {
           if (verbose) {
             final message = String.fromCharCodes(data);
             if (s.sender) {
-              print(chalk.brightGreen(
+              stderr.writeln(chalk.brightGreen(
                   'A -> B : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             } else {
-              print(chalk.brightRed(
+              stderr.writeln(chalk.brightRed(
                   'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             }
           }
@@ -124,23 +125,34 @@ class SocketConnector {
     }
     side.state = SideState.closing;
     try {
-      print(chalk.brightBlue('Destroying side ${side.sender ? 'A' : 'B'}'));
+      if (verbose) {
+        stderr.writeln(
+            chalk.brightBlue('Destroying side ${side.sender ? 'A' : 'B'}'));
+      }
       side.socket.destroy();
-      print(chalk.brightBlue('Destroying other side socket'));
+      if (verbose) {
+        stderr.writeln(chalk.brightBlue('Destroying other side socket'));
+      }
       side.farSide?.socket.destroy();
 
       Connection? connectionToRemove;
       for (final c in establishedConnections) {
         if (c.sideA == side || c.sideB == side) {
-          print(chalk.brightBlue('Found connection to remove'));
+          if (verbose) {
+            stderr.writeln(chalk.brightBlue('Found connection to remove'));
+          }
           connectionToRemove = c;
           break;
         }
       }
       if (establishedConnections.remove(connectionToRemove)) {
-        print(chalk.brightBlue('Removed connection'));
+        if (verbose) {
+          stderr.writeln(chalk.brightBlue('Removed connection'));
+        }
         if (establishedConnections.isEmpty) {
-          print(chalk.brightBlue('Closing connector'));
+          if (verbose) {
+            stderr.writeln(chalk.brightBlue('Closing connector'));
+          }
           close();
         }
       }
@@ -179,7 +191,7 @@ class SocketConnector {
     receiverBindAddress = serverAddressA;
 
     //List<SocketStream> socketStreams;
-    SocketConnector connector = SocketConnector();
+    SocketConnector connector = SocketConnector(verbose: verbose);
     // bind the socket server to an address and port
     connector._serverSocketA =
         await ServerSocket.bind(senderBindAddress, serverPortA);
@@ -191,17 +203,23 @@ class SocketConnector {
     connector._serverSocketA!.listen((
       senderSocket,
     ) {
-      print('Connection on serverSocketA: ${connector._serverSocketA!.port}');
+      if (verbose) {
+        stderr.writeln(
+            'Connection on serverSocketA: ${connector._serverSocketA!.port}');
+      }
       ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(connector._handleSingleConnection(senderSide, verbose,
+      unawaited(connector._handleSingleConnection(senderSide,
           socketAuthVerifier: socketAuthVerifierA));
     });
 
     // listen for receiver connections to the server
     connector._serverSocketB!.listen((receiverSocket) {
-      print('Connection on serverSocketB: ${connector._serverSocketB!.port}');
+      if (verbose) {
+        stderr.writeln(
+            'Connection on serverSocketB: ${connector._serverSocketB!.port}');
+      }
       ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-      unawaited(connector._handleSingleConnection(receiverSide, verbose,
+      unawaited(connector._handleSingleConnection(receiverSide,
           socketAuthVerifier: socketAuthVerifierB));
     });
 
@@ -227,14 +245,14 @@ class SocketConnector {
     serverAddress ??= InternetAddress.anyIPv4;
     receiverBindAddress = serverAddress;
 
-    SocketConnector connector = SocketConnector();
+    SocketConnector connector = SocketConnector(verbose: verbose);
 
     // Create socket to an address and port
     Socket socket = await Socket.connect(socketAddress, socketPort);
     ConnectionSide senderSide = ConnectionSide(socket, true);
 
     // listen for sender connections to the server
-    unawaited(connector._handleSingleConnection(senderSide, verbose,
+    unawaited(connector._handleSingleConnection(senderSide,
         transformer: transformAtoB));
 
     // bind the socket server to an address and port
@@ -244,7 +262,7 @@ class SocketConnector {
     // listen for receiver connections to the server
     connector._serverSocketB?.listen((socketB) {
       ConnectionSide receiverSide = ConnectionSide(socketB, false);
-      unawaited(connector._handleSingleConnection(receiverSide, verbose,
+      unawaited(connector._handleSingleConnection(receiverSide,
           transformer: transformBtoA));
     });
     return (connector);
@@ -263,7 +281,7 @@ class SocketConnector {
   }) async {
     verbose ??= false;
 
-    SocketConnector connector = SocketConnector();
+    SocketConnector connector = SocketConnector(verbose: verbose);
 
     if (verbose) {
       stderr.writeln(
@@ -271,7 +289,7 @@ class SocketConnector {
     }
     Socket senderSocket = await Socket.connect(socketAddressA, socketPortA);
     ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-    unawaited(connector._handleSingleConnection(senderSide, verbose,
+    unawaited(connector._handleSingleConnection(senderSide,
         transformer: transformAtoB));
 
     if (verbose) {
@@ -280,7 +298,7 @@ class SocketConnector {
     }
     Socket receiverSocket = await Socket.connect(socketAddressB, socketPortB);
     ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(connector._handleSingleConnection(receiverSide, verbose,
+    unawaited(connector._handleSingleConnection(receiverSide,
         transformer: transformBtoA));
 
     if (verbose) {
@@ -305,7 +323,7 @@ class SocketConnector {
     DataTransformer? transformBtoA,
     bool verbose = false,
   }) async {
-    SocketConnector connector = SocketConnector();
+    SocketConnector connector = SocketConnector(verbose: verbose);
 
     // bind to a local port to which 'senders' will connect
     connector._serverSocketA =
@@ -313,7 +331,7 @@ class SocketConnector {
     // listen on the local port and connect the inbound socket (the 'sender')
     connector._serverSocketA?.listen((senderSocket) {
       ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(connector._handleSingleConnection(senderSide, verbose,
+      unawaited(connector._handleSingleConnection(senderSide,
           transformer: transformAtoB));
     });
 
@@ -321,7 +339,7 @@ class SocketConnector {
     Socket receiverSocket =
         await Socket.connect(receiverSocketAddress, receiverSocketPort);
     ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(connector._handleSingleConnection(receiverSide, verbose,
+    unawaited(connector._handleSingleConnection(receiverSide,
         transformer: transformBtoA));
 
     return (connector);
