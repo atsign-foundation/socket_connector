@@ -16,7 +16,7 @@ class SocketConnector {
 
   List<Connection> establishedConnections = [];
 
-  Completer<bool> closedCompleter = Completer();
+  final Completer<bool> _closedCompleter = Completer();
 
   /// Returns the TCP port number of the sender socket
   int? senderPort() {
@@ -31,7 +31,7 @@ class SocketConnector {
   /// returns true if sockets are closed/null
   /// wait 30 seconds to ensure network has a chance
   Future<bool> closed() async {
-    return closedCompleter.future;
+    return _closedCompleter.future;
   }
 
   Future<void> _handleSingleConnection(final ConnectionSide thisSide, final bool verbose,
@@ -147,7 +147,7 @@ class SocketConnector {
   void close() {
     _serverSocketA?.close();
     _serverSocketB?.close();
-    closedCompleter.complete(true);
+    _closedCompleter.complete(true);
   }
 
   /// Binds two Server sockets on specified Internet Addresses.
