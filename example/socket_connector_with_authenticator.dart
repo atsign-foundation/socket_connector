@@ -109,7 +109,7 @@ class GoSocketAuthenticatorVerifier implements SocketAuthVerifier {
           completer.complete((false, null));
         }
       }
-    });
+    }, onError: (error) => sc.addError(error), onDone: () => sc.close());
     return completer.future;
   }
 }

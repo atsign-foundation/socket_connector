@@ -8,9 +8,40 @@ typedef DataTransformer = Stream<List<int>> Function(Stream<List<int>>);
 /// Authenticates a socket using some authentication mechanism.
 abstract class SocketAuthVerifier {
   /// Completes with `true` or `false` once authentication is complete.
-  ///
-  /// The stream should yield everything received on the socket after
+  /// - The stream must yield everything received on the socket after
   /// authentication has completed successfully.
+  /// - Upon socket listen onDone, the stream must be closed
+  /// - Upon socket listen onError, the error must be written to the stream
+  ///
+  /// Example: (see example/socket_connector_with_authenticator.dart)
+  /// ```dart
+  /// class GoSocketAuthenticatorVerifier implements SocketAuthVerifier {
+  ///   @override
+  ///   Future<(bool, Stream<Uint8List>?)> authenticate(Socket socket) async {
+  ///     Completer<(bool, Stream<Uint8List>?)> completer = Completer();
+  ///     bool authenticated = false;
+  ///     StreamController<Uint8List> sc = StreamController();
+  ///     socket.listen((Uint8List data) {
+  ///       if (authenticated) {
+  ///         sc.add(data);
+  ///       } else {
+  ///         final message = String.fromCharCodes(data);
+  ///
+  ///         if (message.startsWith("go")) {
+  ///           authenticated = true;
+  ///           completer.complete((true, sc.stream));
+  ///         }
+  ///
+  ///         if (message.startsWith("dontgo")) {
+  ///           authenticated = false;
+  ///           completer.complete((false, null));
+  ///         }
+  ///       }
+  ///     }, onError: (error) => sc.addError(error), onDone: () => sc.close());
+  ///     return completer.future;
+  ///   }
+  /// }
+  /// ```
   Future<(bool, Stream<Uint8List>?)> authenticate(Socket socket);
 }
 
@@ -42,172 +73,9 @@ class Connection {
   }
 }
 
+/// Typical usage is via the [serverToServer], [serverToSocket],
+/// [socketToSocket] and [socketToServer] methods.
 class SocketConnector {
-  /// Binds two Server sockets on specified Internet Addresses.
-  /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
-  /// Finally relays data between sockets and optionally displays contents using the verbose flag
-  static Future<SocketConnector> serverToServer({
-    InternetAddress? serverAddressA,
-    InternetAddress? serverAddressB,
-    int? serverPortA,
-    int? serverPortB,
-    bool verbose = false,
-    SocketAuthVerifier? socketAuthVerifierA,
-    SocketAuthVerifier? socketAuthVerifierB,
-  }) async {
-    InternetAddress senderBindAddress;
-    InternetAddress receiverBindAddress;
-    serverPortA ??= 0;
-    serverPortB ??= 0;
-    serverAddressA ??= InternetAddress.anyIPv4;
-    serverAddressB ??= InternetAddress.anyIPv4;
-
-    senderBindAddress = serverAddressA;
-    receiverBindAddress = serverAddressA;
-
-    //List<SocketStream> socketStreams;
-    SocketConnector connector = SocketConnector();
-    // bind the socket server to an address and port
-    connector._serverSocketA =
-        await ServerSocket.bind(senderBindAddress, serverPortA);
-    // bind the socket server to an address and port
-    connector._serverSocketB =
-        await ServerSocket.bind(receiverBindAddress, serverPortB);
-
-    // listen for sender connections to the server
-    connector._serverSocketA!.listen((
-      senderSocket,
-    ) {
-      print('Connection on serverSocketA: ${connector._serverSocketA!.port}');
-      ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(connector._handleSingleConnection(senderSide, verbose,
-          socketAuthVerifier: socketAuthVerifierA));
-    });
-
-    // listen for receiver connections to the server
-    connector._serverSocketB!.listen((receiverSocket) {
-      print('Connection on serverSocketB: ${connector._serverSocketB!.port}');
-      ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-      unawaited(connector._handleSingleConnection(receiverSide, verbose,
-          socketAuthVerifier: socketAuthVerifierB));
-    });
-
-    return (connector);
-  }
-
-  /// Binds a Server socket on a specified InternetAddress
-  /// Port on which to listen can be specified but if not given a spare port will be found by the OS.
-  /// Then opens socket to specified Internet Address and port
-  /// Finally relays data between sockets and optionally displays contents using the verbose flag
-  static Future<SocketConnector> socketToServer({
-    required InternetAddress socketAddress,
-    required int socketPort,
-    InternetAddress? serverAddress,
-    int? receiverPort,
-    DataTransformer? transformAtoB,
-    DataTransformer? transformBtoA,
-    bool verbose = false,
-  }) async {
-    InternetAddress receiverBindAddress;
-    receiverPort ??= 0;
-
-    serverAddress ??= InternetAddress.anyIPv4;
-    receiverBindAddress = serverAddress;
-
-    SocketConnector connector = SocketConnector();
-
-    // Create socket to an address and port
-    Socket socket = await Socket.connect(socketAddress, socketPort);
-    ConnectionSide senderSide = ConnectionSide(socket, true);
-
-    // listen for sender connections to the server
-    unawaited(connector._handleSingleConnection(senderSide, verbose,
-        transformer: transformAtoB));
-
-    // bind the socket server to an address and port
-    connector._serverSocketB =
-        await ServerSocket.bind(receiverBindAddress, receiverPort);
-
-    // listen for receiver connections to the server
-    connector._serverSocketB?.listen((socketB) {
-      ConnectionSide receiverSide = ConnectionSide(socketB, false);
-      unawaited(connector._handleSingleConnection(receiverSide, verbose,
-          transformer: transformBtoA));
-    });
-    return (connector);
-  }
-
-  /// Opens sockets specified Internet Addresses and ports
-  /// Then relays data between sockets and optionally displays contents using the verbose flag
-  static Future<SocketConnector> socketToSocket({
-    required InternetAddress socketAddressA,
-    required int socketPortA,
-    required InternetAddress socketAddressB,
-    required int socketPortB,
-    DataTransformer? transformAtoB,
-    DataTransformer? transformBtoA,
-    bool? verbose,
-  }) async {
-    verbose ??= false;
-
-    SocketConnector connector = SocketConnector();
-
-    stderr.writeln(
-        'socket_connector: Connecting to $socketAddressA:$socketPortA');
-    Socket senderSocket = await Socket.connect(socketAddressA, socketPortA);
-    ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-    unawaited(connector._handleSingleConnection(senderSide, verbose,
-        transformer: transformAtoB));
-
-    stderr.writeln(
-        'socket_connector: Connecting to $socketAddressB:$socketPortB');
-    Socket receiverSocket = await Socket.connect(socketAddressB, socketPortB);
-    ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(connector._handleSingleConnection(receiverSide, verbose,
-        transformer: transformBtoA));
-
-    stderr.writeln('socket_connector: started');
-    return (connector);
-  }
-
-  /// Binds to [serverPort] on the loopback interface (127.0.0.1)
-  ///
-  /// Listens for a socket connection on that
-  /// port and joins it to a socket connection to [receiverSocketPort]
-  /// on [receiverSocketAddress]
-  ///
-  /// If [serverPort] is not provided then a port is chosen by the OS.
-  ///
-  static Future<SocketConnector> serverToSocket({
-    required InternetAddress receiverSocketAddress,
-    required int receiverSocketPort,
-    int localServerPort = 0,
-    DataTransformer? transformAtoB,
-    DataTransformer? transformBtoA,
-    bool verbose = false,
-  }) async {
-    SocketConnector connector = SocketConnector();
-
-    // bind to a local port to which 'senders' will connect
-    connector._serverSocketA =
-        await ServerSocket.bind(InternetAddress('127.0.0.1'), localServerPort);
-    // listen on the local port and connect the inbound socket (the 'sender')
-    connector._serverSocketA?.listen((senderSocket) {
-      ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(connector._handleSingleConnection(senderSide, verbose,
-          transformer: transformAtoB));
-    });
-
-    // connect to the receiver address and port
-    Socket receiverSocket =
-        await Socket.connect(receiverSocketAddress, receiverSocketPort);
-    ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(connector._handleSingleConnection(receiverSide, verbose,
-        transformer: transformBtoA));
-
-    return (connector);
-  }
-
   SocketConnector();
 
   ServerSocket? _serverSocketA;
@@ -350,5 +218,170 @@ class SocketConnector {
     _serverSocketA?.close();
     _serverSocketB?.close();
     closedCompleter.complete(true);
+  }
+
+  /// Binds two Server sockets on specified Internet Addresses.
+  /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
+  /// Finally relays data between sockets and optionally displays contents using the verbose flag
+  static Future<SocketConnector> serverToServer({
+    InternetAddress? serverAddressA,
+    InternetAddress? serverAddressB,
+    int? serverPortA,
+    int? serverPortB,
+    bool verbose = false,
+    SocketAuthVerifier? socketAuthVerifierA,
+    SocketAuthVerifier? socketAuthVerifierB,
+  }) async {
+    InternetAddress senderBindAddress;
+    InternetAddress receiverBindAddress;
+    serverPortA ??= 0;
+    serverPortB ??= 0;
+    serverAddressA ??= InternetAddress.anyIPv4;
+    serverAddressB ??= InternetAddress.anyIPv4;
+
+    senderBindAddress = serverAddressA;
+    receiverBindAddress = serverAddressA;
+
+    //List<SocketStream> socketStreams;
+    SocketConnector connector = SocketConnector();
+    // bind the socket server to an address and port
+    connector._serverSocketA =
+    await ServerSocket.bind(senderBindAddress, serverPortA);
+    // bind the socket server to an address and port
+    connector._serverSocketB =
+    await ServerSocket.bind(receiverBindAddress, serverPortB);
+
+    // listen for sender connections to the server
+    connector._serverSocketA!.listen((
+        senderSocket,
+        ) {
+      print('Connection on serverSocketA: ${connector._serverSocketA!.port}');
+      ConnectionSide senderSide = ConnectionSide(senderSocket, true);
+      unawaited(connector._handleSingleConnection(senderSide, verbose,
+          socketAuthVerifier: socketAuthVerifierA));
+    });
+
+    // listen for receiver connections to the server
+    connector._serverSocketB!.listen((receiverSocket) {
+      print('Connection on serverSocketB: ${connector._serverSocketB!.port}');
+      ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
+      unawaited(connector._handleSingleConnection(receiverSide, verbose,
+          socketAuthVerifier: socketAuthVerifierB));
+    });
+
+    return (connector);
+  }
+
+  /// Binds a Server socket on a specified InternetAddress
+  /// Port on which to listen can be specified but if not given a spare port will be found by the OS.
+  /// Then opens socket to specified Internet Address and port
+  /// Finally relays data between sockets and optionally displays contents using the verbose flag
+  static Future<SocketConnector> socketToServer({
+    required InternetAddress socketAddress,
+    required int socketPort,
+    InternetAddress? serverAddress,
+    int? receiverPort,
+    DataTransformer? transformAtoB,
+    DataTransformer? transformBtoA,
+    bool verbose = false,
+  }) async {
+    InternetAddress receiverBindAddress;
+    receiverPort ??= 0;
+
+    serverAddress ??= InternetAddress.anyIPv4;
+    receiverBindAddress = serverAddress;
+
+    SocketConnector connector = SocketConnector();
+
+    // Create socket to an address and port
+    Socket socket = await Socket.connect(socketAddress, socketPort);
+    ConnectionSide senderSide = ConnectionSide(socket, true);
+
+    // listen for sender connections to the server
+    unawaited(connector._handleSingleConnection(senderSide, verbose,
+        transformer: transformAtoB));
+
+    // bind the socket server to an address and port
+    connector._serverSocketB =
+    await ServerSocket.bind(receiverBindAddress, receiverPort);
+
+    // listen for receiver connections to the server
+    connector._serverSocketB?.listen((socketB) {
+      ConnectionSide receiverSide = ConnectionSide(socketB, false);
+      unawaited(connector._handleSingleConnection(receiverSide, verbose,
+          transformer: transformBtoA));
+    });
+    return (connector);
+  }
+
+  /// Opens sockets specified Internet Addresses and ports
+  /// Then relays data between sockets and optionally displays contents using the verbose flag
+  static Future<SocketConnector> socketToSocket({
+    required InternetAddress socketAddressA,
+    required int socketPortA,
+    required InternetAddress socketAddressB,
+    required int socketPortB,
+    DataTransformer? transformAtoB,
+    DataTransformer? transformBtoA,
+    bool? verbose,
+  }) async {
+    verbose ??= false;
+
+    SocketConnector connector = SocketConnector();
+
+    stderr.writeln(
+        'socket_connector: Connecting to $socketAddressA:$socketPortA');
+    Socket senderSocket = await Socket.connect(socketAddressA, socketPortA);
+    ConnectionSide senderSide = ConnectionSide(senderSocket, true);
+    unawaited(connector._handleSingleConnection(senderSide, verbose,
+        transformer: transformAtoB));
+
+    stderr.writeln(
+        'socket_connector: Connecting to $socketAddressB:$socketPortB');
+    Socket receiverSocket = await Socket.connect(socketAddressB, socketPortB);
+    ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
+    unawaited(connector._handleSingleConnection(receiverSide, verbose,
+        transformer: transformBtoA));
+
+    stderr.writeln('socket_connector: started');
+    return (connector);
+  }
+
+  /// Binds to [serverPort] on the loopback interface (127.0.0.1)
+  ///
+  /// Listens for a socket connection on that
+  /// port and joins it to a socket connection to [receiverSocketPort]
+  /// on [receiverSocketAddress]
+  ///
+  /// If [serverPort] is not provided then a port is chosen by the OS.
+  ///
+  static Future<SocketConnector> serverToSocket({
+    required InternetAddress receiverSocketAddress,
+    required int receiverSocketPort,
+    int localServerPort = 0,
+    DataTransformer? transformAtoB,
+    DataTransformer? transformBtoA,
+    bool verbose = false,
+  }) async {
+    SocketConnector connector = SocketConnector();
+
+    // bind to a local port to which 'senders' will connect
+    connector._serverSocketA =
+    await ServerSocket.bind(InternetAddress('127.0.0.1'), localServerPort);
+    // listen on the local port and connect the inbound socket (the 'sender')
+    connector._serverSocketA?.listen((senderSocket) {
+      ConnectionSide senderSide = ConnectionSide(senderSocket, true);
+      unawaited(connector._handleSingleConnection(senderSide, verbose,
+          transformer: transformAtoB));
+    });
+
+    // connect to the receiver address and port
+    Socket receiverSocket =
+    await Socket.connect(receiverSocketAddress, receiverSocketPort);
+    ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
+    unawaited(connector._handleSingleConnection(receiverSide, verbose,
+        transformer: transformBtoA));
+
+    return (connector);
   }
 }
