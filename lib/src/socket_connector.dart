@@ -14,7 +14,7 @@ abstract class SocketAuthVerifier {
   Future<(bool, Stream<Uint8List>?)> authenticate(Socket socket);
 }
 
-enum SideState {open, closing, closed}
+enum SideState { open, closing, closed }
 
 class ConnectionSide {
   SideState state = SideState.open;
@@ -43,32 +43,6 @@ class Connection {
 }
 
 class SocketConnector {
-  ServerSocket? _serverSocketA;
-  ServerSocket? _serverSocketB;
-
-  List<ConnectionSide> authenticatedUnpairedSenders = [];
-  List<ConnectionSide> authenticatedUnpairedReceivers = [];
-
-  List<Connection> establishedConnections = [];
-
-  Completer<bool> closedCompleter = Completer();
-
-  /// Returns the TCP port number of the sender socket
-  int? senderPort() {
-    return _serverSocketA?.port;
-  }
-
-  /// Returns the TCP port of the receiver socket
-  int? receiverPort() {
-    return _serverSocketB?.port;
-  }
-
-  /// returns true if sockets are closed/null
-  /// wait 30 seconds to ensure network has a chance
-  Future<bool> closed() async {
-    return closedCompleter.future;
-  }
-
   /// Binds two Server sockets on specified Internet Addresses.
   /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
   /// Finally relays data between sockets and optionally displays contents using the verbose flag
@@ -178,13 +152,15 @@ class SocketConnector {
 
     SocketConnector connector = SocketConnector();
 
-    stderr.writeln('socket_connector: Connecting to $socketAddressA:$socketPortA');
+    stderr.writeln(
+        'socket_connector: Connecting to $socketAddressA:$socketPortA');
     Socket senderSocket = await Socket.connect(socketAddressA, socketPortA);
     ConnectionSide senderSide = ConnectionSide(senderSocket, true);
     unawaited(_handleSingleConnection(senderSide, connector, verbose,
         transformer: transformAtoB));
 
-    stderr.writeln('socket_connector: Connecting to $socketAddressB:$socketPortB');
+    stderr.writeln(
+        'socket_connector: Connecting to $socketAddressB:$socketPortB');
     Socket receiverSocket = await Socket.connect(socketAddressB, socketPortB);
     ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
     unawaited(_handleSingleConnection(receiverSide, connector, verbose,
@@ -210,15 +186,15 @@ class SocketConnector {
     DataTransformer? transformBtoA,
     bool verbose = false,
   }) async {
-    SocketConnector socketStream = SocketConnector();
+    SocketConnector connector = SocketConnector();
 
     // bind to a local port to which 'senders' will connect
-    socketStream._serverSocketA =
-    await ServerSocket.bind(InternetAddress('127.0.0.1'), localServerPort);
+    connector._serverSocketA =
+        await ServerSocket.bind(InternetAddress('127.0.0.1'), localServerPort);
     // listen on the local port and connect the inbound socket (the 'sender')
-    socketStream._serverSocketA?.listen((senderSocket) {
+    connector._serverSocketA?.listen((senderSocket) {
       ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(_handleSingleConnection(senderSide, socketStream, verbose,
+      unawaited(_handleSingleConnection(senderSide, connector, verbose,
           transformer: transformAtoB));
     });
 
@@ -226,10 +202,38 @@ class SocketConnector {
     Socket receiverSocket =
         await Socket.connect(receiverSocketAddress, receiverSocketPort);
     ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(_handleSingleConnection(receiverSide, socketStream, verbose,
+    unawaited(_handleSingleConnection(receiverSide, connector, verbose,
         transformer: transformBtoA));
 
-    return (socketStream);
+    return (connector);
+  }
+
+  SocketConnector();
+
+  ServerSocket? _serverSocketA;
+  ServerSocket? _serverSocketB;
+
+  List<ConnectionSide> authenticatedUnpairedSenders = [];
+  List<ConnectionSide> authenticatedUnpairedReceivers = [];
+
+  List<Connection> establishedConnections = [];
+
+  Completer<bool> closedCompleter = Completer();
+
+  /// Returns the TCP port number of the sender socket
+  int? senderPort() {
+    return _serverSocketA?.port;
+  }
+
+  /// Returns the TCP port of the receiver socket
+  int? receiverPort() {
+    return _serverSocketB?.port;
+  }
+
+  /// returns true if sockets are closed/null
+  /// wait 30 seconds to ensure network has a chance
+  Future<bool> closed() async {
+    return closedCompleter.future;
   }
 
   static Future<void> _handleSingleConnection(final ConnectionSide side,
@@ -240,22 +244,26 @@ class SocketConnector {
         ' ***** _handleSingleConnection: socketAuthVerifier $socketAuthVerifier for ${side.sender ? 'SENDER' : 'RECEIVER'}');
 
     unawaited(side.socket.done.whenComplete(() {
-      stderr.writeln('socket.done is complete on side ${side.sender ? 'A' : 'B'}');
+      stderr.writeln(
+          'socket.done is complete on side ${side.sender ? 'A' : 'B'}');
       _destroySide(connector, side);
     }));
 
     unawaited(side.socket.done.onError((error, stackTrace) {
-      stderr.writeln('socket.done.onError on side ${side.sender ? 'A' : 'B'}: $error');
+      stderr.writeln(
+          'socket.done.onError on side ${side.sender ? 'A' : 'B'}: $error');
       _destroySide(connector, side);
     }));
 
     unawaited(side.socket.done.catchError((error) {
-      stderr.writeln('socket.done.catchError on side ${side.sender ? 'A' : 'B'}: $error');
+      stderr.writeln(
+          'socket.done.catchError on side ${side.sender ? 'A' : 'B'}: $error');
       _destroySide(connector, side);
     }));
 
     side.socket.handleError((error) {
-      stderr.writeln('socket.handleError on side ${side.sender ? 'A' : 'B'}: $error');
+      stderr.writeln(
+          'socket.handleError on side ${side.sender ? 'A' : 'B'}: $error');
       _destroySide(connector, side);
     });
 
@@ -266,7 +274,7 @@ class SocketConnector {
       Stream<Uint8List>? stream;
       try {
         (authenticated, stream) =
-        await socketAuthVerifier.authenticate(side.socket);
+            await socketAuthVerifier.authenticate(side.socket);
         side.authenticated = authenticated;
         if (side.authenticated) {
           side.stream = stream!;
@@ -277,7 +285,8 @@ class SocketConnector {
       }
     }
     if (!side.authenticated) {
-      stderr.writeln('Authentication failed on side ${side.sender ? 'A' : 'B'}');
+      stderr
+          .writeln('Authentication failed on side ${side.sender ? 'A' : 'B'}');
       _destroySide(connector, side);
       return;
     }
@@ -297,7 +306,8 @@ class SocketConnector {
 
     if (connector.authenticatedUnpairedSenders.isNotEmpty &&
         connector.authenticatedUnpairedReceivers.isNotEmpty) {
-      Connection c = Connection(connector.authenticatedUnpairedSenders.removeAt(0),
+      Connection c = Connection(
+          connector.authenticatedUnpairedSenders.removeAt(0),
           connector.authenticatedUnpairedReceivers.removeAt(0));
       connector.establishedConnections.add(c);
 
@@ -318,7 +328,7 @@ class SocketConnector {
     }
   }
 
-  static _onData (ConnectionSide side, Uint8List data, bool verbose) {
+  static _onData(ConnectionSide side, Uint8List data, bool verbose) {
     if (verbose) {
       final message = String.fromCharCodes(data);
       if (side.sender) {
@@ -364,6 +374,7 @@ class SocketConnector {
       side.state = SideState.closed;
     }
   }
+
   void close() {
     _serverSocketA?.close();
     _serverSocketB?.close();
