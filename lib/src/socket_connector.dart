@@ -244,30 +244,6 @@ class SocketConnector {
             ' socketAuthVerifier $socketAuthVerifier'
             ' for ${thisSide.sender ? 'SENDER' : 'RECEIVER'}');
 
-    unawaited(thisSide.socket.done.whenComplete(() {
-      stderr.writeln(
-          'socket.done is complete on side ${thisSide.sender ? 'A' : 'B'}');
-      _destroySide(thisSide);
-    }));
-
-    unawaited(thisSide.socket.done.onError((error, stackTrace) {
-      stderr.writeln(
-          'socket.done.onError on side ${thisSide.sender ? 'A' : 'B'}: $error');
-      _destroySide(thisSide);
-    }));
-
-    unawaited(thisSide.socket.done.catchError((error) {
-      stderr.writeln(
-          'socket.done.catchError on side ${thisSide.sender ? 'A' : 'B'}: $error');
-      _destroySide(thisSide);
-    }));
-
-    thisSide.socket.handleError((error) {
-      stderr.writeln(
-          'socket.handleError on side ${thisSide.sender ? 'A' : 'B'}: $error');
-      _destroySide(thisSide);
-    });
-
     if (socketAuthVerifier == null) {
       thisSide.authenticated = true;
     } else {
@@ -314,7 +290,17 @@ class SocketConnector {
 
       for (final s in [thisSide, thisSide.farSide!]) {
         s.stream.listen((Uint8List data) async {
-          _onData(s, data, verbose);
+          if (verbose) {
+            final message = String.fromCharCodes(data);
+            if (s.sender) {
+              print(chalk.brightGreen(
+                  'A -> B : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            } else {
+              print(chalk.brightRed(
+                  'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
+            }
+          }
+          s.farSide!.sink.add(data);
         }, onDone: () {
           stderr.writeln(
               'stream.onDone on side ${s.sender ? 'A' : 'B'}');
@@ -326,20 +312,6 @@ class SocketConnector {
         });
       }
     }
-  }
-
-  _onData(ConnectionSide side, Uint8List data, bool verbose) {
-    if (verbose) {
-      final message = String.fromCharCodes(data);
-      if (side.sender) {
-        print(chalk.brightBlue(
-            'A -> B : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-      } else {
-        print(chalk.brightBlue(
-            'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
-      }
-    }
-    side.farSide!.sink.add(data);
   }
 
   _destroySide(final ConnectionSide side) {
