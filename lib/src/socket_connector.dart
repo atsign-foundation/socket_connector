@@ -329,7 +329,7 @@ class SocketConnector {
     }
   }
 
-  static _onData(ConnectionSide side, Uint8List data, bool verbose) {
+  _onData(ConnectionSide side, Uint8List data, bool verbose) {
     if (verbose) {
       final message = String.fromCharCodes(data);
       if (side.sender) {
