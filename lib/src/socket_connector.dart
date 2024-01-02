@@ -7,9 +7,10 @@ import 'package:socket_connector/src/types.dart';
 /// Typical usage is via the [serverToServer], [serverToSocket],
 /// [socketToSocket] and [socketToServer] methods.
 class SocketConnector {
-  SocketConnector({required this.verbose});
+  SocketConnector({required this.verbose, required this.logTraffic});
 
   bool verbose;
+  bool logTraffic;
 
   ServerSocket? _serverSocketA;
   ServerSocket? _serverSocketB;
@@ -95,7 +96,7 @@ class SocketConnector {
 
       for (final s in [thisSide, thisSide.farSide!]) {
         s.stream.listen((Uint8List data) async {
-          if (verbose) {
+          if (logTraffic) {
             final message = String.fromCharCodes(data);
             if (s.sender) {
               stderr.writeln(chalk.brightGreen(
@@ -178,6 +179,7 @@ class SocketConnector {
     int? serverPortA,
     int? serverPortB,
     bool verbose = false,
+    bool logTraffic = false,
     SocketAuthVerifier? socketAuthVerifierA,
     SocketAuthVerifier? socketAuthVerifierB,
   }) async {
@@ -191,12 +193,9 @@ class SocketConnector {
     senderBindAddress = serverAddressA;
     receiverBindAddress = serverAddressA;
 
-    //List<SocketStream> socketStreams;
-    SocketConnector connector = SocketConnector(verbose: verbose);
-    // bind the socket server to an address and port
+    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
     connector._serverSocketA =
         await ServerSocket.bind(senderBindAddress, serverPortA);
-    // bind the socket server to an address and port
     connector._serverSocketB =
         await ServerSocket.bind(receiverBindAddress, serverPortB);
 
@@ -239,6 +238,7 @@ class SocketConnector {
     DataTransformer? transformAtoB,
     DataTransformer? transformBtoA,
     bool verbose = false,
+    bool logTraffic = false,
   }) async {
     InternetAddress receiverBindAddress;
     receiverPort ??= 0;
@@ -246,7 +246,7 @@ class SocketConnector {
     serverAddress ??= InternetAddress.anyIPv4;
     receiverBindAddress = serverAddress;
 
-    SocketConnector connector = SocketConnector(verbose: verbose);
+    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
 
     // Create socket to an address and port
     Socket socket = await Socket.connect(socketAddress, socketPort);
@@ -278,11 +278,10 @@ class SocketConnector {
     required int socketPortB,
     DataTransformer? transformAtoB,
     DataTransformer? transformBtoA,
-    bool? verbose,
+    bool verbose = false,
+    bool logTraffic = false,
   }) async {
-    verbose ??= false;
-
-    SocketConnector connector = SocketConnector(verbose: verbose);
+    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
 
     if (verbose) {
       stderr.writeln(
@@ -323,8 +322,9 @@ class SocketConnector {
     DataTransformer? transformAtoB,
     DataTransformer? transformBtoA,
     bool verbose = false,
+    bool logTraffic = false,
   }) async {
-    SocketConnector connector = SocketConnector(verbose: verbose);
+    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
 
     // bind to a local port to which 'senders' will connect
     connector._serverSocketA =
