@@ -80,7 +80,7 @@ class SocketConnector {
     ) {
       print('Connection on serverSocketA: ${connector._serverSocketA!.port}');
       ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(_handleSingleConnection(senderSide, connector, verbose,
+      unawaited(connector._handleSingleConnection(senderSide, verbose,
           socketAuthVerifier: socketAuthVerifierA));
     });
 
@@ -88,7 +88,7 @@ class SocketConnector {
     connector._serverSocketB!.listen((receiverSocket) {
       print('Connection on serverSocketB: ${connector._serverSocketB!.port}');
       ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-      unawaited(_handleSingleConnection(receiverSide, connector, verbose,
+      unawaited(connector._handleSingleConnection(receiverSide, verbose,
           socketAuthVerifier: socketAuthVerifierB));
     });
 
@@ -121,7 +121,7 @@ class SocketConnector {
     ConnectionSide senderSide = ConnectionSide(socket, true);
 
     // listen for sender connections to the server
-    unawaited(_handleSingleConnection(senderSide, connector, verbose,
+    unawaited(connector._handleSingleConnection(senderSide, verbose,
         transformer: transformAtoB));
 
     // bind the socket server to an address and port
@@ -131,7 +131,7 @@ class SocketConnector {
     // listen for receiver connections to the server
     connector._serverSocketB?.listen((socketB) {
       ConnectionSide receiverSide = ConnectionSide(socketB, false);
-      unawaited(_handleSingleConnection(receiverSide, connector, verbose,
+      unawaited(connector._handleSingleConnection(receiverSide, verbose,
           transformer: transformBtoA));
     });
     return (connector);
@@ -156,14 +156,14 @@ class SocketConnector {
         'socket_connector: Connecting to $socketAddressA:$socketPortA');
     Socket senderSocket = await Socket.connect(socketAddressA, socketPortA);
     ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-    unawaited(_handleSingleConnection(senderSide, connector, verbose,
+    unawaited(connector._handleSingleConnection(senderSide, verbose,
         transformer: transformAtoB));
 
     stderr.writeln(
         'socket_connector: Connecting to $socketAddressB:$socketPortB');
     Socket receiverSocket = await Socket.connect(socketAddressB, socketPortB);
     ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(_handleSingleConnection(receiverSide, connector, verbose,
+    unawaited(connector._handleSingleConnection(receiverSide, verbose,
         transformer: transformBtoA));
 
     stderr.writeln('socket_connector: started');
@@ -194,7 +194,7 @@ class SocketConnector {
     // listen on the local port and connect the inbound socket (the 'sender')
     connector._serverSocketA?.listen((senderSocket) {
       ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(_handleSingleConnection(senderSide, connector, verbose,
+      unawaited(connector._handleSingleConnection(senderSide, verbose,
           transformer: transformAtoB));
     });
 
@@ -202,7 +202,7 @@ class SocketConnector {
     Socket receiverSocket =
         await Socket.connect(receiverSocketAddress, receiverSocketPort);
     ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(_handleSingleConnection(receiverSide, connector, verbose,
+    unawaited(connector._handleSingleConnection(receiverSide, verbose,
         transformer: transformBtoA));
 
     return (connector);
@@ -236,8 +236,7 @@ class SocketConnector {
     return closedCompleter.future;
   }
 
-  static Future<void> _handleSingleConnection(final ConnectionSide side,
-      final SocketConnector connector, final bool verbose,
+  Future<void> _handleSingleConnection(final ConnectionSide side, final bool verbose,
       {SocketAuthVerifier? socketAuthVerifier,
       DataTransformer? transformer}) async {
     print(
@@ -246,25 +245,25 @@ class SocketConnector {
     unawaited(side.socket.done.whenComplete(() {
       stderr.writeln(
           'socket.done is complete on side ${side.sender ? 'A' : 'B'}');
-      _destroySide(connector, side);
+      _destroySide(this, side);
     }));
 
     unawaited(side.socket.done.onError((error, stackTrace) {
       stderr.writeln(
           'socket.done.onError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(connector, side);
+      _destroySide(this, side);
     }));
 
     unawaited(side.socket.done.catchError((error) {
       stderr.writeln(
           'socket.done.catchError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(connector, side);
+      _destroySide(this, side);
     }));
 
     side.socket.handleError((error) {
       stderr.writeln(
           'socket.handleError on side ${side.sender ? 'A' : 'B'}: $error');
-      _destroySide(connector, side);
+      _destroySide(this, side);
     });
 
     if (socketAuthVerifier == null) {
@@ -287,14 +286,14 @@ class SocketConnector {
     if (!side.authenticated) {
       stderr
           .writeln('Authentication failed on side ${side.sender ? 'A' : 'B'}');
-      _destroySide(connector, side);
+      _destroySide(this, side);
       return;
     }
 
     if (side.sender) {
-      connector.authenticatedUnpairedSenders.add(side);
+      authenticatedUnpairedSenders.add(side);
     } else {
-      connector.authenticatedUnpairedReceivers.add(side);
+      authenticatedUnpairedReceivers.add(side);
     }
 
     if (transformer != null) {
@@ -304,26 +303,26 @@ class SocketConnector {
       transformed.listen(side.socket.add);
     }
 
-    if (connector.authenticatedUnpairedSenders.isNotEmpty &&
-        connector.authenticatedUnpairedReceivers.isNotEmpty) {
+    if (authenticatedUnpairedSenders.isNotEmpty &&
+        authenticatedUnpairedReceivers.isNotEmpty) {
       Connection c = Connection(
-          connector.authenticatedUnpairedSenders.removeAt(0),
-          connector.authenticatedUnpairedReceivers.removeAt(0));
-      connector.establishedConnections.add(c);
+          authenticatedUnpairedSenders.removeAt(0),
+          authenticatedUnpairedReceivers.removeAt(0));
+      establishedConnections.add(c);
 
       side.stream.listen((Uint8List data) async {
         _onData(side, data, verbose);
       }, onDone: () {
-        _destroySide(connector, side);
+        _destroySide(this, side);
       }, onError: (error) {
-        _destroySide(connector, side);
+        _destroySide(this, side);
       });
       side.farSide!.stream.listen((Uint8List data) async {
         _onData(side.farSide!, data, verbose);
       }, onDone: () {
-        _destroySide(connector, side);
+        _destroySide(this, side);
       }, onError: (error) {
-        _destroySide(connector, side);
+        _destroySide(this, side);
       });
     }
   }
