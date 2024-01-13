@@ -62,9 +62,11 @@ class Side {
   bool authenticated = false;
   BytesBuilder buffer = BytesBuilder();
   Side? farSide;
+  SocketAuthVerifier? socketAuthVerifier;
+  DataTransformer? transformer;
 
   String get name => isSideA ? 'A' : 'B';
-  Side(this.socket, this.isSideA) {
+  Side(this.socket, this.isSideA, {this.socketAuthVerifier, this.transformer}) {
     sink = socket;
     stream = socket;
   }
