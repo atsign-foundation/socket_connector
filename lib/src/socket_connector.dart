@@ -5,155 +5,201 @@ import 'package:chalkdart/chalk.dart';
 import 'package:socket_connector/src/types.dart';
 
 /// Typical usage is via the [serverToServer], [serverToSocket],
-/// [socketToSocket] and [socketToServer] methods.
+/// [socketToSocket] and [socketToServer] methods which are different flavours
+/// of the same functionality - to relay information from one socket to another.
+///
+/// - Upon creation, a [Timer] will be created for [timeout] duration. The
+///   timer callback, when it executes, calls [close] if [connections]
+//    is empty
+/// - When an established connection is closed, [close] will be called if
+///   [connections] is empty
+/// - New [Connection]s are added to [connections] when both
+///   [pendingA] and [pendingB] have
+///   at least one entry
+/// - When [verbose] is true, log messages will be logged to [logger]
+/// - When [logTraffic] is true, socket traffic will be logged to [logger]
 class SocketConnector {
-  SocketConnector({required this.verbose, required this.logTraffic});
+  static const defaultTimeout = Duration(seconds: 30);
 
+  SocketConnector({
+    this.verbose = false,
+    this.logTraffic = false,
+    this.timeout = defaultTimeout,
+    IOSink? logger,
+  }) {
+    this.logger = logger ?? stderr;
+    Timer(timeout, () {
+      if (connections.isEmpty) {
+        close();
+      }
+    });
+  }
+
+  /// Where we will write anything we want to log. Defaults to stderr
+  late IOSink logger;
+
+  /// When true, log messages will be logged to [logger]
   bool verbose;
+
+  /// When true, socket traffic will be logged to [logger]
   bool logTraffic;
 
+  /// - Upon creation, a [Timer] will be created for [timeout] duration. The timer
+  ///   callback calls [close] if [connections] is empty
+  final Duration timeout;
+
+  void log(String s) {
+    logger.writeln('${DateTime.now()} | SocketConnector | $s');
+  }
+
+  /// The [ServerSocket] on side 'A', if any
   ServerSocket? _serverSocketA;
+
+  /// The [ServerSocket] on side 'B', if any
   ServerSocket? _serverSocketB;
 
-  List<ConnectionSide> authenticatedUnpairedSenders = [];
-  List<ConnectionSide> authenticatedUnpairedReceivers = [];
+  ///
+  final List<Side> pendingA = [];
+  final List<Side> pendingB = [];
 
-  List<Connection> establishedConnections = [];
+  final List<Connection> connections = [];
 
-  final Completer<bool> _closedCompleter = Completer();
+  final Completer _closedCompleter = Completer();
 
-  /// Returns the TCP port number of the sender socket
-  int? senderPort() {
-    return _serverSocketA?.port;
-  }
+  /// Completes when either
+  /// 1. [connections] size goes from >0 to 0, or
+  /// 2. [timeout] has passed and  [connections] is empty
+  Future get done => _closedCompleter.future;
 
-  /// Returns the TCP port of the receiver socket
-  int? receiverPort() {
-    return _serverSocketB?.port;
-  }
+  /// Whether this SocketConnector is closed or not
+  bool get closed => _closedCompleter.isCompleted;
 
-  /// returns true if sockets are closed/null
-  /// wait 30 seconds to ensure network has a chance
-  Future<bool> closed() async {
-    return _closedCompleter.future;
-  }
+  /// Returns the TCP port number of [_serverSocketA] if any
+  int? get sideAPort => _serverSocketA?.port;
 
-  Future<void> _handleSingleConnection(
-    final ConnectionSide thisSide, {
+  /// Returns the TCP port number of [_serverSocketB] if any
+  int? get sideBPort => _serverSocketB?.port;
+
+  /// Add a [Side] with optional [SocketAuthVerifier] and
+  /// [DataTransformer]
+  /// - If [socketAuthVerifier] provided, wait for socket to be authenticated
+  /// - All data from the corresponding 'far' side will be transformed by the
+  ///   [transformer] if supplied. For example: [socketToSocket] creates a
+  ///   [Side]s A and B, and has parameters `transformAtoB` and
+  ///   `transformBtoA`.
+  Future<void> handleSingleConnection(
+    final Side thisSide, {
     SocketAuthVerifier? socketAuthVerifier,
     DataTransformer? transformer,
   }) async {
-    if (verbose) {
-      stderr.writeln(' _handleSingleConnection :'
-          ' socketAuthVerifier $socketAuthVerifier'
-          ' for ${thisSide.sender ? 'SENDER' : 'RECEIVER'}');
+    if (closed) {
+      throw StateError('Connector is closed');
     }
-
     if (socketAuthVerifier == null) {
       thisSide.authenticated = true;
     } else {
       bool authenticated;
       Stream<Uint8List>? stream;
       try {
-        (authenticated, stream) =
-            await socketAuthVerifier.authenticate(thisSide.socket);
+        (authenticated, stream) = await socketAuthVerifier(thisSide.socket)
+            .timeout(Duration(seconds: 5));
         thisSide.authenticated = authenticated;
         if (thisSide.authenticated) {
+          log('Authentication succeeded on side ${thisSide.name}');
           thisSide.stream = stream!;
         }
       } catch (e) {
-        stderr.writeln('Error while authenticating '
-            ' side ${thisSide.sender ? 'A' : 'B'}'
-            ' : $e');
+        log('Error while authenticating side ${thisSide.name} : $e');
         thisSide.authenticated = false;
       }
     }
     if (!thisSide.authenticated) {
-      stderr.writeln('Authentication failed on'
-          ' side ${thisSide.sender ? 'A' : 'B'}');
+      log('Authentication failed on side ${thisSide.name}');
       _destroySide(thisSide);
       return;
     }
 
-    if (thisSide.sender) {
-      authenticatedUnpairedSenders.add(thisSide);
+    if (thisSide.isSideA) {
+      pendingA.add(thisSide);
     } else {
-      authenticatedUnpairedReceivers.add(thisSide);
+      pendingB.add(thisSide);
     }
 
     if (transformer != null) {
+      // transformer is there to transform data originating from thisSide
       StreamController<Uint8List> sc = StreamController<Uint8List>();
-      thisSide.sink = sc;
+      thisSide.farSide!.sink = sc;
       Stream<List<int>> transformed = transformer(sc.stream);
-      transformed.listen(thisSide.socket.add);
+      transformed.listen(thisSide.farSide!.socket.add);
     }
 
-    if (authenticatedUnpairedSenders.isNotEmpty &&
-        authenticatedUnpairedReceivers.isNotEmpty) {
-      Connection c = Connection(authenticatedUnpairedSenders.removeAt(0),
-          authenticatedUnpairedReceivers.removeAt(0));
-      establishedConnections.add(c);
+    if (pendingA.isNotEmpty && pendingB.isNotEmpty) {
+      Connection c = Connection(pendingA.removeAt(0), pendingB.removeAt(0));
+      connections.add(c);
 
       for (final s in [thisSide, thisSide.farSide!]) {
         s.stream.listen((Uint8List data) async {
           if (logTraffic) {
             final message = String.fromCharCodes(data);
-            if (s.sender) {
-              stderr.writeln(chalk.brightGreen(
+            if (s.isSideA) {
+              log(chalk.brightGreen(
                   'A -> B : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             } else {
-              stderr.writeln(chalk.brightRed(
+              log(chalk.brightRed(
                   'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             }
           }
           s.farSide!.sink.add(data);
         }, onDone: () {
           if (verbose) {
-            stderr.writeln('stream.onDone on side ${s.sender ? 'A' : 'B'}');
+            log('stream.onDone on side ${s.name}');
           }
           _destroySide(s);
         }, onError: (error) {
-          stderr.writeln(
-              'stream.onError on side ${s.sender ? 'A' : 'B'}: $error');
+          log('stream.onError on side ${s.name}: $error');
           _destroySide(s);
         });
       }
     }
   }
 
-  _destroySide(final ConnectionSide side) {
+  _destroySide(final Side side) {
     if (side.state != SideState.open) {
       return;
     }
     side.state = SideState.closing;
     try {
       if (verbose) {
-        stderr.writeln(
-            chalk.brightBlue('Destroying side ${side.sender ? 'A' : 'B'}'));
+        log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       }
       side.socket.destroy();
-      if (verbose) {
-        stderr.writeln(chalk.brightBlue('Destroying other side socket'));
+      if (side.farSide != null) {
+        if (verbose) {
+          log(chalk.brightBlue(
+              'Destroying socket on far side (${side.farSide?.name})'));
+        }
+        side.farSide?.socket.destroy();
       }
-      side.farSide?.socket.destroy();
 
       Connection? connectionToRemove;
-      for (final c in establishedConnections) {
+      for (final c in connections) {
         if (c.sideA == side || c.sideB == side) {
           if (verbose) {
-            stderr.writeln(chalk.brightBlue('Found connection to remove'));
+            log(chalk.brightBlue('Will remove established connection'));
           }
           connectionToRemove = c;
           break;
         }
       }
-      if (establishedConnections.remove(connectionToRemove)) {
+      if (connectionToRemove != null) {
+        connections.remove(connectionToRemove);
         if (verbose) {
-          stderr.writeln(chalk.brightBlue('Removed connection'));
+          log(chalk.brightBlue('Removed connection'));
         }
-        if (establishedConnections.isEmpty) {
+        if (connections.isEmpty) {
           if (verbose) {
-            stderr.writeln(chalk.brightBlue('Closing connector'));
+            log(chalk.brightBlue('No established connections remain - '
+                ' will close connector'));
           }
           close();
         }
@@ -166,182 +212,223 @@ class SocketConnector {
 
   void close() {
     _serverSocketA?.close();
+    _serverSocketA = null;
+
     _serverSocketB?.close();
-    _closedCompleter.complete(true);
+    _serverSocketB = null;
+
+    if (!_closedCompleter.isCompleted) {
+      _closedCompleter.complete();
+      log('closed');
+    }
+    for (final s in pendingA) {
+      _destroySide(s);
+    }
+    pendingA.clear();
+    for (final s in pendingB) {
+      _destroySide(s);
+    }
+    pendingB.clear();
   }
 
   /// Binds two Server sockets on specified Internet Addresses.
   /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
   /// Finally relays data between sockets and optionally displays contents using the verbose flag
   static Future<SocketConnector> serverToServer({
-    InternetAddress? serverAddressA,
-    InternetAddress? serverAddressB,
-    int? serverPortA,
-    int? serverPortB,
+    /// Defaults to [InternetAddress.anyIPv4]
+    InternetAddress? addressA,
+    int portA = 0,
+
+    /// Defaults to [InternetAddress.anyIPv4]
+    InternetAddress? addressB,
+    int portB = 0,
     bool verbose = false,
     bool logTraffic = false,
     SocketAuthVerifier? socketAuthVerifierA,
     SocketAuthVerifier? socketAuthVerifierB,
+    Duration timeout = SocketConnector.defaultTimeout,
+    IOSink? logger,
   }) async {
-    InternetAddress senderBindAddress;
-    InternetAddress receiverBindAddress;
-    serverPortA ??= 0;
-    serverPortB ??= 0;
-    serverAddressA ??= InternetAddress.anyIPv4;
-    serverAddressB ??= InternetAddress.anyIPv4;
+    IOSink logSink = logger ?? stderr;
+    addressA ??= InternetAddress.anyIPv4;
+    addressB ??= InternetAddress.anyIPv4;
 
-    senderBindAddress = serverAddressA;
-    receiverBindAddress = serverAddressA;
+    SocketConnector connector = SocketConnector(
+      verbose: verbose,
+      logTraffic: logTraffic,
+      timeout: timeout,
+      logger: logSink,
+    );
+    connector._serverSocketA = await ServerSocket.bind(addressA, portA);
+    connector._serverSocketB = await ServerSocket.bind(addressB, portB);
+    logSink.writeln(
+        '${DateTime.now()} | serverToServer | Bound ports A: ${connector.sideAPort}, B: ${connector.sideBPort}');
 
-    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
-    connector._serverSocketA =
-        await ServerSocket.bind(senderBindAddress, serverPortA);
-    connector._serverSocketB =
-        await ServerSocket.bind(receiverBindAddress, serverPortB);
-
-    // listen for sender connections to the server
+    // listen for connections to the side 'A' server
     connector._serverSocketA!.listen((
-      senderSocket,
+      socket,
     ) {
       if (verbose) {
-        stderr.writeln(
-            'Connection on serverSocketA: ${connector._serverSocketA!.port}');
+        logSink.writeln(
+            '${DateTime.now()} | serverToServer | Connection on serverSocketA: ${connector._serverSocketA!.port}');
       }
-      ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(connector._handleSingleConnection(senderSide,
+      Side sideA = Side(socket, true);
+      unawaited(connector.handleSingleConnection(sideA,
           socketAuthVerifier: socketAuthVerifierA));
     });
 
-    // listen for receiver connections to the server
-    connector._serverSocketB!.listen((receiverSocket) {
+    // listen for connections to the side 'B' server
+    connector._serverSocketB!.listen((socket) {
       if (verbose) {
-        stderr.writeln(
-            'Connection on serverSocketB: ${connector._serverSocketB!.port}');
+        logSink.writeln(
+            '${DateTime.now()} | serverToServer | Connection on serverSocketB: ${connector._serverSocketB!.port}');
       }
-      ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-      unawaited(connector._handleSingleConnection(receiverSide,
+      Side sideB = Side(socket, false);
+      unawaited(connector.handleSingleConnection(sideB,
           socketAuthVerifier: socketAuthVerifierB));
     });
 
     return (connector);
   }
 
-  /// Binds a Server socket on a specified InternetAddress
-  /// Port on which to listen can be specified but if not given a spare port will be found by the OS.
-  /// Then opens socket to specified Internet Address and port
-  /// Finally relays data between sockets and optionally displays contents using the verbose flag
+  /// - Creates socket to [portA] on [addressA]
+  /// - Binds to [portB] on [addressB]
+  /// - Listens for a socket connection on [portB] port and joins it to
+  ///   the 'A' side
+  ///
+  /// - If [portB] is not provided then a port is chosen by the OS.
+  /// - [addressB] defaults to [InternetAddress.anyIPv4]
   static Future<SocketConnector> socketToServer({
-    required InternetAddress socketAddress,
-    required int socketPort,
-    InternetAddress? serverAddress,
-    int? receiverPort,
+    required InternetAddress addressA,
+    required int portA,
+
+    /// Defaults to [InternetAddress.anyIPv4]
+    InternetAddress? addressB,
+    int portB = 0,
     DataTransformer? transformAtoB,
     DataTransformer? transformBtoA,
     bool verbose = false,
     bool logTraffic = false,
+    Duration timeout = SocketConnector.defaultTimeout,
+    IOSink? logger,
   }) async {
-    InternetAddress receiverBindAddress;
-    receiverPort ??= 0;
+    IOSink logSink = logger ?? stderr;
+    addressB ??= InternetAddress.anyIPv4;
 
-    serverAddress ??= InternetAddress.anyIPv4;
-    receiverBindAddress = serverAddress;
-
-    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
+    SocketConnector connector = SocketConnector(
+      verbose: verbose,
+      logTraffic: logTraffic,
+      timeout: timeout,
+      logger: logSink,
+    );
 
     // Create socket to an address and port
-    Socket socket = await Socket.connect(socketAddress, socketPort);
-    ConnectionSide senderSide = ConnectionSide(socket, true);
+    Socket socket = await Socket.connect(addressA, portA);
+    Side sideA = Side(socket, true);
+    unawaited(
+        connector.handleSingleConnection(sideA, transformer: transformAtoB));
 
-    // listen for sender connections to the server
-    unawaited(connector._handleSingleConnection(senderSide,
-        transformer: transformAtoB));
+    // bind to side 'B' port
+    connector._serverSocketB = await ServerSocket.bind(addressB, portB);
 
-    // bind the socket server to an address and port
-    connector._serverSocketB =
-        await ServerSocket.bind(receiverBindAddress, receiverPort);
-
-    // listen for receiver connections to the server
+    // listen for connections to the 'B' side port
     connector._serverSocketB?.listen((socketB) {
-      ConnectionSide receiverSide = ConnectionSide(socketB, false);
-      unawaited(connector._handleSingleConnection(receiverSide,
-          transformer: transformBtoA));
+      Side sideB = Side(socketB, false);
+      unawaited(
+          connector.handleSingleConnection(sideB, transformer: transformBtoA));
     });
     return (connector);
   }
 
-  /// Opens sockets specified Internet Addresses and ports
-  /// Then relays data between sockets and optionally displays contents using the verbose flag
+  /// - Creates socket to [portA] on [addressA]
+  /// - Creates socket to [portB] on [addressB]
+  /// - Relays data between the sockets
   static Future<SocketConnector> socketToSocket({
-    required InternetAddress socketAddressA,
-    required int socketPortA,
-    required InternetAddress socketAddressB,
-    required int socketPortB,
+    required InternetAddress addressA,
+    required int portA,
+    required InternetAddress addressB,
+    required int portB,
     DataTransformer? transformAtoB,
     DataTransformer? transformBtoA,
     bool verbose = false,
     bool logTraffic = false,
+    Duration timeout = SocketConnector.defaultTimeout,
+    IOSink? logger,
   }) async {
-    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
+    IOSink logSink = logger ?? stderr;
+    SocketConnector connector = SocketConnector(
+      verbose: verbose,
+      logTraffic: logTraffic,
+      timeout: timeout,
+      logger: logSink,
+    );
 
     if (verbose) {
-      stderr.writeln(
-          'socket_connector: Connecting to $socketAddressA:$socketPortA');
+      logSink.writeln('socket_connector: Connecting to $addressA:$portA');
     }
-    Socket senderSocket = await Socket.connect(socketAddressA, socketPortA);
-    ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-    unawaited(connector._handleSingleConnection(senderSide,
-        transformer: transformAtoB));
+    Socket sideASocket = await Socket.connect(addressA, portA);
+    Side sideA = Side(sideASocket, true);
+    unawaited(connector.handleSingleConnection(sideA,
+        transformer: transformAtoB)); // e.g. an encrypter
 
     if (verbose) {
-      stderr.writeln(
-          'socket_connector: Connecting to $socketAddressB:$socketPortB');
+      logSink.writeln('socket_connector: Connecting to $addressB:$portB');
     }
-    Socket receiverSocket = await Socket.connect(socketAddressB, socketPortB);
-    ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(connector._handleSingleConnection(receiverSide,
-        transformer: transformBtoA));
+    Socket sideBSocket = await Socket.connect(addressB, portB);
+    Side sideB = Side(sideBSocket, false);
+    unawaited(connector.handleSingleConnection(sideB,
+        transformer: transformBtoA)); // e.g. a decrypter
 
     if (verbose) {
-      stderr.writeln('socket_connector: started');
+      logSink.writeln('socket_connector: started');
     }
     return (connector);
   }
 
-  /// Binds to [serverPort] on the loopback interface (127.0.0.1)
+  /// - Creates socket to [portB] on [addressB]
+  /// - Binds to [portA] on [addressA]
+  /// - Listens for a socket connection on [portA] port and joins it to
+  ///   the 'B' side
   ///
-  /// Listens for a socket connection on that
-  /// port and joins it to a socket connection to [receiverSocketPort]
-  /// on [receiverSocketAddress]
-  ///
-  /// If [serverPort] is not provided then a port is chosen by the OS.
-  ///
+  /// - If [portA] is not provided then a port is chosen by the OS.
+  /// - [addressA] defaults to [InternetAddress.anyIPv4]
   static Future<SocketConnector> serverToSocket({
-    required InternetAddress receiverSocketAddress,
-    required int receiverSocketPort,
-    int localServerPort = 0,
+    /// Defaults to [InternetAddress.anyIPv4]
+    InternetAddress? addressA,
+    int portA = 0,
+    required InternetAddress addressB,
+    required int portB,
     DataTransformer? transformAtoB,
     DataTransformer? transformBtoA,
     bool verbose = false,
     bool logTraffic = false,
+    Duration timeout = SocketConnector.defaultTimeout,
+    IOSink? logger,
   }) async {
-    SocketConnector connector = SocketConnector(verbose: verbose, logTraffic: logTraffic);
+    IOSink logSink = logger ?? stderr;
+    addressA ??= InternetAddress.anyIPv4;
 
-    // bind to a local port to which 'senders' will connect
-    connector._serverSocketA =
-        await ServerSocket.bind(InternetAddress('127.0.0.1'), localServerPort);
-    // listen on the local port and connect the inbound socket (the 'sender')
-    connector._serverSocketA?.listen((senderSocket) {
-      ConnectionSide senderSide = ConnectionSide(senderSocket, true);
-      unawaited(connector._handleSingleConnection(senderSide,
-          transformer: transformAtoB));
+    SocketConnector connector = SocketConnector(
+      verbose: verbose,
+      logTraffic: logTraffic,
+      timeout: timeout,
+      logger: logSink,
+    );
+
+    // bind to a local port for side 'A'
+    connector._serverSocketA = await ServerSocket.bind(addressA, portA);
+    // listen on the local port and connect the inbound socket
+    connector._serverSocketA?.listen((socket) {
+      Side sideA = Side(socket, true);
+      unawaited(
+          connector.handleSingleConnection(sideA, transformer: transformAtoB));
     });
 
-    // connect to the receiver address and port
-    Socket receiverSocket =
-        await Socket.connect(receiverSocketAddress, receiverSocketPort);
-    ConnectionSide receiverSide = ConnectionSide(receiverSocket, false);
-    unawaited(connector._handleSingleConnection(receiverSide,
-        transformer: transformBtoA));
+    // connect to the side 'B' address and port
+    Socket sideBSocket = await Socket.connect(addressB, portB);
+    Side sideB = Side(sideBSocket, false);
+    unawaited(
+        connector.handleSingleConnection(sideB, transformer: transformBtoA));
 
     return (connector);
   }
