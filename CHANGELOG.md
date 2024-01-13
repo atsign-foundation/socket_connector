@@ -5,9 +5,9 @@
   transform the data while sending from A to B, and vice versa. Useful for
   adding traffic encryption, for example.
 - Refactored for readability
-- Breaking changes to the package as a whole, although no breaking changes to 
-  the main API (static methods `serverToServer`, `serverToSocket`,
-  `socketToSocket`, `socketToServer`)
+- Multiple breaking changes to improve API readability
+- More documentation
+- More tests
 
 ## 1.0.11
 - Added close function to SocketConnector
