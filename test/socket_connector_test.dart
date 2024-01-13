@@ -7,7 +7,7 @@ import 'package:socket_connector/socket_connector.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Socket tests', () {
+  group('Just socket tests', () {
     test('Test Side A Port bound', () async {
       SocketConnector connector = await SocketConnector.serverToServer(
         portA: 0,
@@ -109,7 +109,7 @@ void main() {
       socketA.write('hello world from side A');
       socketB.write('hello world from side B');
       // Wait for the sockets to send and receive data
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 10));
 
       expect(
           (rcvdA == "hello world from side B") &&
@@ -166,7 +166,7 @@ void main() {
       socketA.write('hello world from side A');
       socketB.write('hello world from side B');
       // Wait for the sockets to send and receive data
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 10));
 
       print('buffer A: [$rcvdA], buffer B: [$rcvdB]');
       expect(
@@ -226,7 +226,7 @@ void main() {
 
       socketA.write("hello world from side A");
       socketB.write('hello world from side B');
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 10));
 
       expect(
           (rcvdA == "hello world from side B") &&
@@ -283,7 +283,7 @@ void main() {
       socketA.write('hello world from side A');
       socketB.write('hello world from side B');
       // Wait for the sockets to send and receive data
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 10));
 
       expect(
           (rcvdA == "hello world from side B") &&
@@ -377,7 +377,7 @@ void main() {
       socketA.write('hello world from side A');
       socketB.write('hello world from side B');
       // Wait for the sockets to send and receive data
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 10));
 
       expect(
           (rcvdA == "hello world from side B") &&
@@ -464,7 +464,7 @@ void main() {
       socketA.write('hello world from side A');
       socketB.write('hello world from side B');
       // Wait for the sockets to send and receive data
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 10));
 
       expect(
           (rcvdA == "hello world from side B") &&
@@ -561,5 +561,201 @@ void main() {
       await connector.done.timeout(Duration.zero);
     });
   });
-  group('Transformer tests', () {});
+  group('Transformer tests', () {
+    test('Test socketToServer with one string reversing transformer', () async {
+      // Bind to a port that SocketConnector.socketToServer can connect to
+      ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
+
+      SocketConnector connector = await SocketConnector.socketToServer(
+        addressA: testExternalServer.address,
+        portA: testExternalServer.port,
+        transformAtoB: reverser,
+        timeout: Duration(milliseconds: 100),
+      );
+      expect(connector.connections.isEmpty, true);
+
+      String rcvdA = '';
+      String rcvdB = '';
+
+      late Socket socketA;
+      Completer readyA = Completer();
+      testExternalServer.listen((socket) {
+        socketA = socket;
+        socketA.listen((List<int> data) {
+          rcvdA = String.fromCharCodes(data);
+        });
+        readyA.complete();
+      });
+
+      await readyA.future;
+      expect(connector.connections.isEmpty, true);
+
+      Socket socketB = await Socket.connect(
+        'localhost',
+        connector.sideBPort!,
+      );
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(Duration(milliseconds: 10)));
+      expect(connector.connections.isEmpty, false);
+
+      socketB.listen((List<int> data) {
+        rcvdB = String.fromCharCodes(data);
+      });
+
+      socketA.write('hello world from side A');
+      socketB.write('hello world from side B');
+      // Wait for the sockets to send and receive data
+      await Future.delayed(Duration(milliseconds: 10));
+
+      print ('rcvdA: [$rcvdA], rcvdB: [$rcvdB]');
+      expect(rcvdA, "hello world from side B");
+      expect(rcvdB, reverseString("hello world from side A"));
+
+      socketB.destroy();
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(Duration(milliseconds: 10)));
+      expect(connector.closed, true);
+      await connector.done.timeout(Duration.zero);
+    });
+
+    test('Test socketToSocket with two prefixing transformers', () async {
+      // Bind two ports that SocketConnector.socketToSocket can connect to
+      ServerSocket testExternalServerA =
+      await ServerSocket.bind('127.0.0.1', 0);
+      ServerSocket testExternalServerB =
+      await ServerSocket.bind('127.0.0.1', 0);
+
+      SocketConnector connector = await SocketConnector.socketToSocket(
+        addressA: testExternalServerA.address,
+        portA: testExternalServerA.port,
+        transformAtoB: aToB,
+        addressB: testExternalServerB.address,
+        portB: testExternalServerB.port,
+        transformBtoA: bToA,
+      );
+
+      String rcvdA = '';
+      String rcvdB = '';
+
+      late Socket socketA;
+      Completer readyA = Completer();
+      testExternalServerA.listen((socket) {
+        socketA = socket;
+        readyA.complete();
+
+        socketA.listen((List<int> data) {
+          rcvdA = String.fromCharCodes(data);
+        });
+      });
+
+      late Socket socketB;
+      Completer readyB = Completer();
+      testExternalServerB.listen((socket) {
+        socketB = socket;
+        readyB.complete();
+
+        socketB.listen((List<int> data) {
+          rcvdB = String.fromCharCodes(data);
+        });
+      });
+
+      await readyA.future;
+      await readyB.future;
+
+      socketA.write("hello world from side A");
+      socketB.write('hello world from side B');
+      await Future.delayed(Duration(milliseconds: 10));
+
+      print ('rcvdA: [$rcvdA], rcvdB: [$rcvdB]');
+      expect(rcvdA, "$prefixFromB hello world from side B");
+      expect(rcvdB, "$prefixFromA hello world from side A");
+
+      socketA.destroy();
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(Duration(milliseconds: 10)));
+      expect(connector.closed, true);
+      await connector.done.timeout(Duration.zero);
+    });
+
+    test('Test serverToSocket with two string reversing transformers', () async {
+      // Bind to a port that SocketConnector.serverToSocket can connect to
+      ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
+
+      SocketConnector connector = await SocketConnector.serverToSocket(
+        addressB: testExternalServer.address,
+        portB: testExternalServer.port,
+        transformAtoB: reverser,
+        transformBtoA: reverser,
+        timeout: Duration(milliseconds: 100),
+      );
+      expect(connector.connections.isEmpty, true);
+
+      String rcvdA = '';
+      String rcvdB = '';
+
+      late Socket socketB;
+      Completer readyB = Completer();
+      testExternalServer.listen((socket) {
+        socketB = socket;
+        readyB.complete();
+        socketB.listen((List<int> data) {
+          rcvdB = String.fromCharCodes(data);
+        });
+      });
+
+      await readyB.future;
+      expect(connector.connections.isEmpty, true);
+
+      Socket socketA = await Socket.connect(
+        'localhost',
+        connector.sideAPort!,
+      );
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(Duration(milliseconds: 10)));
+      expect(connector.connections.isEmpty, false);
+
+      socketA.listen((List<int> data) {
+        rcvdA = String.fromCharCodes(data);
+      });
+
+      socketA.write('hello world from side A');
+      socketB.write('hello world from side B');
+      await Future.delayed(Duration(milliseconds: 10));
+
+      print ('rcvdA: [$rcvdA], rcvdB: [$rcvdB]');
+      expect(rcvdA, reverseString("hello world from side B"));
+      expect(rcvdB, reverseString("hello world from side A"));
+
+      socketA.destroy();
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(Duration(milliseconds: 10)));
+      expect(connector.closed, true);
+      await connector.done.timeout(Duration.zero);
+    });
+  });
+}
+
+Stream<List<int>> addPrefix(Stream<List<int>> source, {List<int> prefix = const []}) async* {
+  await for (final bytes in source) {
+    final List<int> l = List.from(prefix);
+    l.addAll(bytes);
+    yield l;
+  }
+}
+var prefixFromA = 'from A:';
+Stream<List<int>> aToB(Stream<List<int>> source) {
+  return addPrefix(source, prefix: '$prefixFromA '.codeUnits);
+}
+var prefixFromB = 'from B:';
+Stream<List<int>> bToA(Stream<List<int>> source) {
+  return addPrefix(source, prefix: '$prefixFromB '.codeUnits);
+}
+
+String reverseString (String s) {
+  return s.split('').reversed.join();
+}
+Stream<List<int>> reverser(Stream<List<int>> source, {List<int> prefix = const []}) async* {
+  await for (final bytes in source) {
+    yield reverseString(String.fromCharCodes(bytes)).codeUnits;
+  }
 }
