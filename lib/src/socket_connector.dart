@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:chalkdart/chalk.dart';
+import 'package:meta/meta.dart';
 import 'package:socket_connector/src/types.dart';
 
 /// Typical usage is via the [serverToServer], [serverToSocket],
@@ -48,25 +49,16 @@ class SocketConnector {
   ///   callback calls [close] if [connections] is empty
   final Duration timeout;
 
-  void log(String s) {
-    if (verbose) {
-      logger.writeln('${DateTime.now()} | SocketConnector | $s');
-    }
-  }
-
-  /// The [ServerSocket] on side 'A', if any
-  ServerSocket? _serverSocketA;
-
-  /// The [ServerSocket] on side 'B', if any
-  ServerSocket? _serverSocketB;
-
-  ///
-  final List<Side> pendingA = [];
-  final List<Side> pendingB = [];
-
+  /// The established [Connection]s
   final List<Connection> connections = [];
 
-  final Completer _closedCompleter = Completer();
+  /// A [Side]s which are available for pairing with the next B side connections
+  @visibleForTesting
+  final List<Side> pendingA = [];
+
+  /// B [Side]s which are available for pairing with the next A side connections
+  @visibleForTesting
+  final List<Side> pendingB = [];
 
   /// Completes when either
   /// 1. [connections] size goes from >0 to 0, or
@@ -81,6 +73,14 @@ class SocketConnector {
 
   /// Returns the TCP port number of [_serverSocketB] if any
   int? get sideBPort => _serverSocketB?.port;
+
+  /// The [ServerSocket] on side 'A', if any
+  ServerSocket? _serverSocketA;
+
+  /// The [ServerSocket] on side 'B', if any
+  ServerSocket? _serverSocketB;
+
+  final Completer _closedCompleter = Completer();
 
   /// Add a [Side] with optional [SocketAuthVerifier] and
   /// [DataTransformer]
@@ -99,20 +99,21 @@ class SocketConnector {
       bool authenticated;
       Stream<Uint8List>? stream;
       try {
-        (authenticated, stream) = await thisSide.socketAuthVerifier!(thisSide.socket)
+        (authenticated, stream) = await thisSide.socketAuthVerifier!
+                (thisSide.socket)
             .timeout(Duration(seconds: 5));
         thisSide.authenticated = authenticated;
         if (thisSide.authenticated) {
           thisSide.stream = stream!;
-          log('Authentication succeeded on side ${thisSide.name}');
+          _log('Authentication succeeded on side ${thisSide.name}');
         }
       } catch (e) {
         thisSide.authenticated = false;
-        log('Error while authenticating side ${thisSide.name} : $e');
+        _log('Error while authenticating side ${thisSide.name} : $e');
       }
     }
     if (!thisSide.authenticated) {
-      log('Authentication failed on side ${thisSide.name}');
+      _log('Authentication failed on side ${thisSide.name}');
       _destroySide(thisSide);
       return;
     }
@@ -139,19 +140,19 @@ class SocketConnector {
           if (logTraffic) {
             final message = String.fromCharCodes(data);
             if (side.isSideA) {
-              log(chalk.brightGreen(
+              _log(chalk.brightGreen(
                   'A -> B : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             } else {
-              log(chalk.brightRed(
+              _log(chalk.brightRed(
                   'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             }
           }
           side.farSide!.sink.add(data);
         }, onDone: () {
-          log('stream.onDone on side ${side.name}');
+          _log('stream.onDone on side ${side.name}');
           _destroySide(side);
         }, onError: (error) {
-          log('stream.onError on side ${side.name}: $error');
+          _log('stream.onError on side ${side.name}: $error');
           _destroySide(side);
         });
       }
@@ -164,10 +165,10 @@ class SocketConnector {
     }
     side.state = SideState.closing;
     try {
-      log(chalk.brightBlue('Destroying socket on side ${side.name}'));
+      _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
       if (side.farSide != null) {
-        log(chalk.brightBlue(
+        _log(chalk.brightBlue(
             'Destroying socket on far side (${side.farSide?.name})'));
         side.farSide?.socket.destroy();
       }
@@ -175,16 +176,16 @@ class SocketConnector {
       Connection? connectionToRemove;
       for (final c in connections) {
         if (c.sideA == side || c.sideB == side) {
-          log(chalk.brightBlue('Will remove established connection'));
+          _log(chalk.brightBlue('Will remove established connection'));
           connectionToRemove = c;
           break;
         }
       }
       if (connectionToRemove != null) {
         connections.remove(connectionToRemove);
-        log(chalk.brightBlue('Removed connection'));
+        _log(chalk.brightBlue('Removed connection'));
         if (connections.isEmpty) {
-          log(chalk.brightBlue('No established connections remain - '
+          _log(chalk.brightBlue('No established connections remain - '
               ' will close connector'));
           close();
         }
@@ -204,7 +205,7 @@ class SocketConnector {
 
     if (!_closedCompleter.isCompleted) {
       _closedCompleter.complete();
-      log('closed');
+      _log('closed');
     }
     for (final s in pendingA) {
       _destroySide(s);
@@ -214,6 +215,12 @@ class SocketConnector {
       _destroySide(s);
     }
     pendingB.clear();
+  }
+
+  void _log(String s) {
+    if (verbose) {
+      logger.writeln('${DateTime.now()} | SocketConnector | $s');
+    }
   }
 
   /// Binds two Server sockets on specified Internet Addresses.
@@ -248,8 +255,7 @@ class SocketConnector {
     connector._serverSocketB = await ServerSocket.bind(addressB, portB);
     if (verbose) {
       logSink.writeln(
-          '${DateTime.now()} | serverToServer | Bound ports A: ${connector
-              .sideAPort}, B: ${connector.sideBPort}');
+          '${DateTime.now()} | serverToServer | Bound ports A: ${connector.sideAPort}, B: ${connector.sideBPort}');
     }
 
     // listen for connections to the side 'A' server
@@ -258,9 +264,7 @@ class SocketConnector {
     ) {
       if (verbose) {
         logSink.writeln(
-            '${DateTime
-                .now()} | serverToServer | Connection on serverSocketA: ${connector
-                ._serverSocketA!.port}');
+            '${DateTime.now()} | serverToServer | Connection on serverSocketA: ${connector._serverSocketA!.port}');
       }
       Side sideA = Side(socket, true, socketAuthVerifier: socketAuthVerifierA);
       unawaited(connector.handleSingleConnection(sideA));
@@ -270,9 +274,7 @@ class SocketConnector {
     connector._serverSocketB!.listen((socket) {
       if (verbose) {
         logSink.writeln(
-            '${DateTime
-                .now()} | serverToServer | Connection on serverSocketB: ${connector
-                ._serverSocketB!.port}');
+            '${DateTime.now()} | serverToServer | Connection on serverSocketB: ${connector._serverSocketB!.port}');
       }
       Side sideB = Side(socket, false, socketAuthVerifier: socketAuthVerifierB);
       unawaited(connector.handleSingleConnection(sideB));
@@ -315,8 +317,7 @@ class SocketConnector {
     // Create socket to an address and port
     Socket socket = await Socket.connect(addressA, portA);
     Side sideA = Side(socket, true, transformer: transformAtoB);
-    unawaited(
-        connector.handleSingleConnection(sideA));
+    unawaited(connector.handleSingleConnection(sideA));
 
     // bind to side 'B' port
     connector._serverSocketB = await ServerSocket.bind(addressB, portB);
@@ -324,8 +325,7 @@ class SocketConnector {
     // listen for connections to the 'B' side port
     connector._serverSocketB?.listen((socketB) {
       Side sideB = Side(socketB, false, transformer: transformBtoA);
-      unawaited(
-          connector.handleSingleConnection(sideB));
+      unawaited(connector.handleSingleConnection(sideB));
     });
     return (connector);
   }
@@ -408,15 +408,13 @@ class SocketConnector {
     // listen on the local port and connect the inbound socket
     connector._serverSocketA?.listen((socket) {
       Side sideA = Side(socket, true, transformer: transformAtoB);
-      unawaited(
-          connector.handleSingleConnection(sideA));
+      unawaited(connector.handleSingleConnection(sideA));
     });
 
     // connect to the side 'B' address and port
     Socket sideBSocket = await Socket.connect(addressB, portB);
     Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
-    unawaited(
-        connector.handleSingleConnection(sideB));
+    unawaited(connector.handleSingleConnection(sideB));
 
     return (connector);
   }
