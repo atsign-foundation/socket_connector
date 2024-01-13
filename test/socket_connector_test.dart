@@ -12,7 +12,7 @@ void main() {
       SocketConnector connector = await SocketConnector.serverToServer(
         portA: 0,
         portB: 0,
-        verbose: true,
+        verbose: false,
       );
       int? portA = connector.sideAPort;
 
@@ -28,7 +28,7 @@ void main() {
       SocketConnector connector = await SocketConnector.serverToServer(
         portA: 0,
         portB: 0,
-        verbose: true,
+        verbose: false,
       );
       expect(connector.sideBPort, isNotNull);
       expect(connector.sideBPort! > 1024 && connector.sideBPort! < 65535, true);
@@ -43,7 +43,7 @@ void main() {
         portA: 0,
         portB: 0,
         timeout: Duration(milliseconds: 5),
-        verbose: true,
+        verbose: false,
       );
 
       await Future.delayed(Duration(milliseconds: 6));
@@ -56,7 +56,7 @@ void main() {
         portA: 0,
         portB: 0,
         timeout: Duration(milliseconds: 5),
-        verbose: true,
+        verbose: false,
       );
 
       expect(connector.closed, false);
@@ -72,7 +72,7 @@ void main() {
         portA: 0,
         portB: 0,
         timeout: timeout,
-        verbose: true,
+        verbose: false,
       );
       expect(connector.connections.isEmpty, true);
 
@@ -130,7 +130,7 @@ void main() {
       SocketConnector connector = await SocketConnector.socketToServer(
         addressA: testExternalServer.address,
         portA: testExternalServer.port,
-        verbose: true,
+        verbose: false,
         timeout: Duration(milliseconds: 100),
       );
       expect(connector.connections.isEmpty, true);
@@ -193,7 +193,7 @@ void main() {
         portA: testExternalServerA.port,
         addressB: testExternalServerB.address,
         portB: testExternalServerB.port,
-        verbose: true,
+        verbose: false,
       );
 
       String rcvdA = '';
@@ -247,7 +247,7 @@ void main() {
       SocketConnector connector = await SocketConnector.serverToSocket(
         addressB: testExternalServer.address,
         portB: testExternalServer.port,
-        verbose: true,
+        verbose: false,
         timeout: Duration(milliseconds: 100),
       );
       expect(connector.connections.isEmpty, true);
@@ -326,7 +326,7 @@ void main() {
         socketAuthVerifierA: goAuthVerifier,
         socketAuthVerifierB: goAuthVerifier,
         timeout: timeout,
-        verbose: true,
+        verbose: false,
       );
       expect(connector.connections.isEmpty, true);
 
@@ -397,7 +397,7 @@ void main() {
         socketAuthVerifierA: goAuthVerifier,
         socketAuthVerifierB: goAuthVerifier,
         timeout: timeout,
-        verbose: true,
+        verbose: false,
       );
       expect(connector.connections.isEmpty, true);
 
@@ -484,7 +484,7 @@ void main() {
         socketAuthVerifierA: goAuthVerifier,
         socketAuthVerifierB: goAuthVerifier,
         timeout: timeout,
-        verbose: true,
+        verbose: false,
       );
       expect(connector.connections.isEmpty, true);
 
@@ -501,7 +501,6 @@ void main() {
           connector.sideAPort!,
         );
         if (authedA.length < 3 && r.nextInt(5) == 4) {
-          print('adding to authedA');
           socketA.write('go');
           authedA.add(socketA);
         }
@@ -510,7 +509,6 @@ void main() {
           connector.sideBPort!,
         );
         if (authedB.length < 3 && r.nextInt(5) == 4) {
-          print('adding to authedB');
           socketB.write('go');
           authedB.add(socketB);
         }

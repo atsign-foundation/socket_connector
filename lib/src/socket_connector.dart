@@ -49,7 +49,9 @@ class SocketConnector {
   final Duration timeout;
 
   void log(String s) {
-    logger.writeln('${DateTime.now()} | SocketConnector | $s');
+    if (verbose) {
+      logger.writeln('${DateTime.now()} | SocketConnector | $s');
+    }
   }
 
   /// The [ServerSocket] on side 'A', if any
@@ -101,12 +103,12 @@ class SocketConnector {
             .timeout(Duration(seconds: 5));
         thisSide.authenticated = authenticated;
         if (thisSide.authenticated) {
-          log('Authentication succeeded on side ${thisSide.name}');
           thisSide.stream = stream!;
+          log('Authentication succeeded on side ${thisSide.name}');
         }
       } catch (e) {
-        log('Error while authenticating side ${thisSide.name} : $e');
         thisSide.authenticated = false;
+        log('Error while authenticating side ${thisSide.name} : $e');
       }
     }
     if (!thisSide.authenticated) {
@@ -146,9 +148,7 @@ class SocketConnector {
           }
           side.farSide!.sink.add(data);
         }, onDone: () {
-          if (verbose) {
-            log('stream.onDone on side ${side.name}');
-          }
+          log('stream.onDone on side ${side.name}');
           _destroySide(side);
         }, onError: (error) {
           log('stream.onError on side ${side.name}: $error');
@@ -164,38 +164,28 @@ class SocketConnector {
     }
     side.state = SideState.closing;
     try {
-      if (verbose) {
-        log(chalk.brightBlue('Destroying socket on side ${side.name}'));
-      }
+      log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
       if (side.farSide != null) {
-        if (verbose) {
-          log(chalk.brightBlue(
-              'Destroying socket on far side (${side.farSide?.name})'));
-        }
+        log(chalk.brightBlue(
+            'Destroying socket on far side (${side.farSide?.name})'));
         side.farSide?.socket.destroy();
       }
 
       Connection? connectionToRemove;
       for (final c in connections) {
         if (c.sideA == side || c.sideB == side) {
-          if (verbose) {
-            log(chalk.brightBlue('Will remove established connection'));
-          }
+          log(chalk.brightBlue('Will remove established connection'));
           connectionToRemove = c;
           break;
         }
       }
       if (connectionToRemove != null) {
         connections.remove(connectionToRemove);
-        if (verbose) {
-          log(chalk.brightBlue('Removed connection'));
-        }
+        log(chalk.brightBlue('Removed connection'));
         if (connections.isEmpty) {
-          if (verbose) {
-            log(chalk.brightBlue('No established connections remain - '
-                ' will close connector'));
-          }
+          log(chalk.brightBlue('No established connections remain - '
+              ' will close connector'));
           close();
         }
       }
@@ -256,8 +246,11 @@ class SocketConnector {
     );
     connector._serverSocketA = await ServerSocket.bind(addressA, portA);
     connector._serverSocketB = await ServerSocket.bind(addressB, portB);
-    logSink.writeln(
-        '${DateTime.now()} | serverToServer | Bound ports A: ${connector.sideAPort}, B: ${connector.sideBPort}');
+    if (verbose) {
+      logSink.writeln(
+          '${DateTime.now()} | serverToServer | Bound ports A: ${connector
+              .sideAPort}, B: ${connector.sideBPort}');
+    }
 
     // listen for connections to the side 'A' server
     connector._serverSocketA!.listen((
@@ -265,7 +258,9 @@ class SocketConnector {
     ) {
       if (verbose) {
         logSink.writeln(
-            '${DateTime.now()} | serverToServer | Connection on serverSocketA: ${connector._serverSocketA!.port}');
+            '${DateTime
+                .now()} | serverToServer | Connection on serverSocketA: ${connector
+                ._serverSocketA!.port}');
       }
       Side sideA = Side(socket, true, socketAuthVerifier: socketAuthVerifierA);
       unawaited(connector.handleSingleConnection(sideA));
@@ -275,7 +270,9 @@ class SocketConnector {
     connector._serverSocketB!.listen((socket) {
       if (verbose) {
         logSink.writeln(
-            '${DateTime.now()} | serverToServer | Connection on serverSocketB: ${connector._serverSocketB!.port}');
+            '${DateTime
+                .now()} | serverToServer | Connection on serverSocketB: ${connector
+                ._serverSocketB!.port}');
       }
       Side sideB = Side(socket, false, socketAuthVerifier: socketAuthVerifierB);
       unawaited(connector.handleSingleConnection(sideB));
