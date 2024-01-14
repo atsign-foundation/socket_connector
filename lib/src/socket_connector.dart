@@ -53,11 +53,9 @@ class SocketConnector {
   final List<Connection> connections = [];
 
   /// A [Side]s which are available for pairing with the next B side connections
-  @visibleForTesting
   final List<Side> pendingA = [];
 
   /// B [Side]s which are available for pairing with the next A side connections
-  @visibleForTesting
   final List<Side> pendingB = [];
 
   /// Completes when either
