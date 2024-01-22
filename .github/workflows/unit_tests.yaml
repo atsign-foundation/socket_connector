@@ -1,0 +1,27 @@
+name: unit_tests
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - trunk
+
+  pull_request:
+    branches:
+      - trunk
+
+jobs:
+  unit_tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: dart-lang/setup-dart@ca7e6fee45ffbd82b555a7ebfc236d2c86439f5b # v1.6.1
+      - name: dart pub get
+        run: dart pub get
+      - name: dart analyze
+        run: dart analyze
+      - name: dart test
+        run: dart test
