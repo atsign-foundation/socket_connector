@@ -1,3 +1,6 @@
+## 2.0.1
+- Removed an unnecessary dependency
+
 ## 2.0.0
 - Added support for requiring client sockets to be authenticated in some 
   app-defined way before they will be connected to the other side
