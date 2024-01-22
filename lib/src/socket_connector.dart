@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:chalkdart/chalk.dart';
-import 'package:meta/meta.dart';
 import 'package:socket_connector/src/types.dart';
 
 /// Typical usage is via the [serverToServer], [serverToSocket],
