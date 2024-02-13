@@ -106,11 +106,12 @@ class SocketConnector {
         }
       } catch (e) {
         thisSide.authenticated = false;
-        _log('Error while authenticating side ${thisSide.name} : $e');
+        _log('Error while authenticating side ${thisSide.name} : $e',
+            force: true);
       }
     }
     if (!thisSide.authenticated) {
-      _log('Authentication failed on side ${thisSide.name}');
+      _log('Authentication failed on side ${thisSide.name}', force: true);
       _destroySide(thisSide);
       return;
     }
@@ -149,7 +150,7 @@ class SocketConnector {
           _log('stream.onDone on side ${side.name}');
           _destroySide(side);
         }, onError: (error) {
-          _log('stream.onError on side ${side.name}: $error');
+          _log('stream.onError on side ${side.name}: $error', force: true);
           _destroySide(side);
         });
       }
@@ -214,8 +215,8 @@ class SocketConnector {
     pendingB.clear();
   }
 
-  void _log(String s) {
-    if (verbose) {
+  void _log(String s, {bool force = false}) {
+    if (verbose || force) {
       logger.writeln('${DateTime.now()} | SocketConnector | $s');
     }
   }
@@ -377,19 +378,21 @@ class SocketConnector {
   ///
   /// - If [portA] is not provided then a port is chosen by the OS.
   /// - [addressA] defaults to [InternetAddress.anyIPv4]
-  static Future<SocketConnector> serverToSocket({
-    /// Defaults to [InternetAddress.anyIPv4]
-    InternetAddress? addressA,
-    int portA = 0,
-    required InternetAddress addressB,
-    required int portB,
-    DataTransformer? transformAtoB,
-    DataTransformer? transformBtoA,
-    bool verbose = false,
-    bool logTraffic = false,
-    Duration timeout = SocketConnector.defaultTimeout,
-    IOSink? logger,
-  }) async {
+  static Future<SocketConnector> serverToSocket(
+      {
+      /// Defaults to [InternetAddress.anyIPv4]
+      InternetAddress? addressA,
+      int portA = 0,
+      required InternetAddress addressB,
+      required int portB,
+      DataTransformer? transformAtoB,
+      DataTransformer? transformBtoA,
+      bool verbose = false,
+      bool logTraffic = false,
+      Duration timeout = SocketConnector.defaultTimeout,
+      IOSink? logger,
+      bool multi = false,
+      Function(Socket sideA, Socket sideB)? onConnect}) async {
     IOSink logSink = logger ?? stderr;
     addressA ??= InternetAddress.anyIPv4;
 
@@ -400,18 +403,27 @@ class SocketConnector {
       logger: logSink,
     );
 
+    int connections = 0;
     // bind to a local port for side 'A'
     connector._serverSocketA = await ServerSocket.bind(addressA, portA);
     // listen on the local port and connect the inbound socket
-    connector._serverSocketA?.listen((socket) {
-      Side sideA = Side(socket, true, transformer: transformAtoB);
+    connector._serverSocketA?.listen((sideASocket) async {
+      if (!multi) {
+        unawaited(connector._serverSocketA?.close());
+      }
+      Side sideA = Side(sideASocket, true, transformer: transformAtoB);
       unawaited(connector.handleSingleConnection(sideA));
-    });
 
-    // connect to the side 'B' address and port
-    Socket sideBSocket = await Socket.connect(addressB, portB);
-    Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
-    unawaited(connector.handleSingleConnection(sideB));
+      if (verbose) {
+        logSink.writeln('Making connection ${++connections} to the "B" side');
+      }
+      // connect to the side 'B' address and port
+      Socket sideBSocket = await Socket.connect(addressB, portB);
+      Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
+      unawaited(connector.handleSingleConnection(sideB));
+
+      onConnect?.call(sideASocket, sideBSocket);
+    });
 
     return (connector);
   }
