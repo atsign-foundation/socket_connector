@@ -375,9 +375,12 @@ class SocketConnector {
   /// - Binds to [portA] on [addressA]
   /// - Listens for a socket connection on [portA] port and joins it to
   ///   the 'B' side
-  ///
   /// - If [portA] is not provided then a port is chosen by the OS.
   /// - [addressA] defaults to [InternetAddress.anyIPv4]
+  /// - [multi] flag controls whether or not to allow multiple connections
+  ///   to the bound server port [portA]
+  /// - [onConnect] is called when [portA] has got a new connection and a
+  ///   corresponding outbound socket has been created to [addressB]:[portB]
   static Future<SocketConnector> serverToSocket(
       {
       /// Defaults to [InternetAddress.anyIPv4]
