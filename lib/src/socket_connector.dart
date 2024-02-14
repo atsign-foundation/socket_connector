@@ -332,6 +332,7 @@ class SocketConnector {
   /// - Creates socket to [portB] on [addressB]
   /// - Relays data between the sockets
   static Future<SocketConnector> socketToSocket({
+    SocketConnector? connector,
     required InternetAddress addressA,
     required int portA,
     required InternetAddress addressB,
@@ -344,7 +345,7 @@ class SocketConnector {
     IOSink? logger,
   }) async {
     IOSink logSink = logger ?? stderr;
-    SocketConnector connector = SocketConnector(
+    connector ??= SocketConnector(
       verbose: verbose,
       logTraffic: logTraffic,
       timeout: timeout,
