@@ -426,9 +426,7 @@ class SocketConnector {
       Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
       unawaited(connector.handleSingleConnection(sideB));
 
-      Future.delayed(Duration(milliseconds: 0), () {
-        onConnect?.call(sideASocket, sideBSocket);
-      });
+      onConnect?.call(sideASocket, sideBSocket);
     });
 
     return (connector);
