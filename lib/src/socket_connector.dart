@@ -21,6 +21,8 @@ import 'package:socket_connector/src/types.dart';
 class SocketConnector {
   static const defaultTimeout = Duration(seconds: 30);
 
+  bool gracePeriodPassed = false;
+
   SocketConnector({
     this.verbose = false,
     this.logTraffic = false,
@@ -29,6 +31,7 @@ class SocketConnector {
   }) {
     this.logger = logger ?? stderr;
     Timer(timeout, () {
+      gracePeriodPassed = true;
       if (connections.isEmpty) {
         close();
       }
@@ -182,8 +185,9 @@ class SocketConnector {
       if (connectionToRemove != null) {
         connections.remove(connectionToRemove);
         _log(chalk.brightBlue('Removed connection'));
-        if (connections.isEmpty) {
-          _log(chalk.brightBlue('No established connections remain - '
+        if (connections.isEmpty && gracePeriodPassed) {
+          _log(chalk.brightBlue('No established connections remain'
+              ' and grace period has passed - '
               ' will close connector'));
           close();
         }
