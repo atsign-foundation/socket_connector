@@ -426,7 +426,7 @@ class SocketConnector {
       Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
       unawaited(connector.handleSingleConnection(sideB));
 
-      unawaited(onConnect?.call(sideASocket, sideBSocket));
+      onConnect?.call(sideASocket, sideBSocket);
     });
 
     return (connector);
