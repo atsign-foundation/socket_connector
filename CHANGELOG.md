@@ -1,3 +1,13 @@
+## 2.1.0
+- Added `multi` parameter to `SocketConnector.serverToSocket` - whether to
+  create new connections on the "B" side every time there is a new "A" side
+  connection to the bound server port. Also added `onConnect` parameter,
+  so that callers can be informed when every new connection is made, and
+  can thus take whatever action they require.
+- feat: Added grace period so that SocketConnector doesn't close until both
+  (a) initial timeout has expired and (b) number of established connections
+  is zero or has dropped to zero
+
 ## 2.0.1
 - Removed an unnecessary dependency
 

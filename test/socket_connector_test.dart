@@ -67,7 +67,8 @@ void main() {
     });
 
     test('Test ServerToServer', () async {
-      Duration timeout = Duration(milliseconds: 200);
+      int timeoutMs = 200;
+      Duration timeout = Duration(milliseconds: timeoutMs);
       SocketConnector connector = await SocketConnector.serverToServer(
         portA: 0,
         portB: 0,
@@ -118,12 +119,13 @@ void main() {
 
       socketB.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(Duration(milliseconds: timeoutMs)));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
 
     test('Test socketToServer', () async {
+      int timeoutMs = 100;
       // Bind to a port that SocketConnector.socketToServer can connect to
       ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
 
@@ -131,7 +133,7 @@ void main() {
         addressA: testExternalServer.address,
         portA: testExternalServer.port,
         verbose: false,
-        timeout: Duration(milliseconds: 100),
+        timeout: Duration(milliseconds: timeoutMs),
       );
       expect(connector.connections.isEmpty, true);
 
@@ -176,12 +178,13 @@ void main() {
 
       socketB.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(Duration(milliseconds: timeoutMs)));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
 
     test('Test socketToSocket', () async {
+      int timeoutMs = 200;
       // Bind two ports that SocketConnector.socketToSocket can connect to
       ServerSocket testExternalServerA =
           await ServerSocket.bind('127.0.0.1', 0);
@@ -194,6 +197,7 @@ void main() {
         addressB: testExternalServerB.address,
         portB: testExternalServerB.port,
         verbose: false,
+        timeout: Duration(milliseconds: timeoutMs),
       );
 
       String rcvdA = '';
@@ -235,20 +239,21 @@ void main() {
 
       socketA.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(Duration(milliseconds: timeoutMs)));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
 
-    test('Test serverToSocket', () async {
+    test('Test serverToSocket single', () async {
       // Bind to a port that SocketConnector.serverToSocket can connect to
       ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
 
+      int timeoutMs = 100;
       SocketConnector connector = await SocketConnector.serverToSocket(
         addressB: testExternalServer.address,
         portB: testExternalServer.port,
         verbose: false,
-        timeout: Duration(milliseconds: 100),
+        timeout: Duration(milliseconds: timeoutMs),
       );
       expect(connector.connections.isEmpty, true);
 
@@ -265,15 +270,14 @@ void main() {
         });
       });
 
-      await readyB.future;
-      expect(connector.connections.isEmpty, true);
-
       Socket socketA = await Socket.connect(
         'localhost',
         connector.sideAPort!,
       );
       // Wait for SocketConnector to handle the events
       await (Future.delayed(Duration(milliseconds: 10)));
+      await readyB.future;
+
       expect(connector.connections.isEmpty, false);
 
       socketA.listen((List<int> data) {
@@ -292,11 +296,91 @@ void main() {
 
       socketA.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(Duration(milliseconds: timeoutMs)));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
+
+    test('Test serverToSocket multi', () async {
+      // Bind to a port that SocketConnector.serverToSocket can connect to
+      ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
+
+      int serverConnections = 0;
+      SocketConnector connector = await SocketConnector.serverToSocket(
+          addressB: testExternalServer.address,
+          portB: testExternalServer.port,
+          verbose: true,
+          timeout: Duration(milliseconds: 100),
+          multi: true,
+          onConnect: (Socket sideA, Socket sideB) {
+            serverConnections++;
+            print('SocketConnector.serverToSocket onConnect called back');
+          });
+      expect(connector.connections.isEmpty, true);
+
+      List<String> rcvdA = [];
+      List<String> rcvdB = [];
+      List<Socket> bSockets = [];
+
+      Socket? currentSocketB;
+      testExternalServer.listen((socket) {
+        currentSocketB = socket;
+        bSockets.add(socket);
+        int which = bSockets.length;
+        socket.listen((List<int> data) {
+          var msg = '$which: ${String.fromCharCodes(data)}';
+          print('socket B ultimate destination received $msg');
+          rcvdB.add(msg);
+        });
+      });
+
+      expect(connector.connections.isEmpty, true);
+
+      int howMany = 5;
+      List<Socket> aSockets = [];
+      for (int i = 0; i < howMany; i++) {
+        Socket socketA = await Socket.connect(
+          'localhost',
+          connector.sideAPort!,
+        );
+        aSockets.add(socketA);
+        // Wait for SocketConnector to handle the events
+        await (Future.delayed(Duration(milliseconds: 10)));
+        expect(connector.connections.isEmpty, false);
+
+        socketA.listen((List<int> data) {
+          var msg = '${aSockets.length}: ${String.fromCharCodes(data)}';
+          print('socket A ultimate client received $msg');
+          rcvdA.add(msg);
+        });
+
+        // Wait for the sockets to send and receive data
+        await Future.delayed(Duration(milliseconds: 10));
+
+        socketA.write('hello world from side A');
+        expect(currentSocketB != null, true);
+        currentSocketB?.write('hello world from side B');
+        // Wait for the sockets to send and receive data
+        await Future.delayed(Duration(milliseconds: 10));
+
+        expect(rcvdA.last, "${aSockets.length}: hello world from side B");
+        expect(rcvdB.last, "${bSockets.length}: hello world from side A");
+        expect(rcvdA.length, i + 1);
+        expect(rcvdB.length, i + 1);
+      }
+
+      expect(serverConnections, howMany);
+
+      for (final s in aSockets) {
+        s.destroy();
+      }
+      await (Future.delayed(Duration(milliseconds: 10)));
+      expect(connector.closed, true);
+
+      await connector.done.timeout(Duration.zero);
+    });
   });
+
   group('Authenticator tests', () {
     Future<(bool, Stream<Uint8List>?)> goAuthVerifier(Socket socket) async {
       Completer<(bool, Stream<Uint8List>?)> completer = Completer();
@@ -386,7 +470,7 @@ void main() {
 
       socketB.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(timeout));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
@@ -473,7 +557,7 @@ void main() {
 
       socketB.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(timeout));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
@@ -554,7 +638,7 @@ void main() {
       expect(connector.closed, false);
 
       authedB[2].destroy();
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(timeout));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
@@ -564,11 +648,12 @@ void main() {
       // Bind to a port that SocketConnector.socketToServer can connect to
       ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
 
+      var timeout = Duration(milliseconds: 100);
       SocketConnector connector = await SocketConnector.socketToServer(
         addressA: testExternalServer.address,
         portA: testExternalServer.port,
         transformAtoB: reverser,
-        timeout: Duration(milliseconds: 100),
+        timeout: timeout,
       );
       expect(connector.connections.isEmpty, true);
 
@@ -611,12 +696,13 @@ void main() {
 
       socketB.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(timeout));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
 
     test('Test socketToSocket with two prefixing transformers', () async {
+      int timeoutMs = 100;
       // Bind two ports that SocketConnector.socketToSocket can connect to
       ServerSocket testExternalServerA =
           await ServerSocket.bind('127.0.0.1', 0);
@@ -630,6 +716,7 @@ void main() {
         addressB: testExternalServerB.address,
         portB: testExternalServerB.port,
         transformBtoA: bToA,
+        timeout: Duration(milliseconds: timeoutMs),
       );
 
       String rcvdA = '';
@@ -670,7 +757,7 @@ void main() {
 
       socketA.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(Duration(milliseconds: timeoutMs)));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
@@ -680,12 +767,13 @@ void main() {
       // Bind to a port that SocketConnector.serverToSocket can connect to
       ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
 
+      var timeout = Duration(milliseconds: 100);
       SocketConnector connector = await SocketConnector.serverToSocket(
         addressB: testExternalServer.address,
         portB: testExternalServer.port,
         transformAtoB: reverser,
         transformBtoA: reverser,
-        timeout: Duration(milliseconds: 100),
+        timeout: timeout,
       );
       expect(connector.connections.isEmpty, true);
 
@@ -702,15 +790,13 @@ void main() {
         });
       });
 
-      await readyB.future;
-      expect(connector.connections.isEmpty, true);
-
       Socket socketA = await Socket.connect(
         'localhost',
         connector.sideAPort!,
       );
       // Wait for SocketConnector to handle the events
       await (Future.delayed(Duration(milliseconds: 10)));
+      await readyB.future;
       expect(connector.connections.isEmpty, false);
 
       socketA.listen((List<int> data) {
@@ -727,7 +813,7 @@ void main() {
 
       socketA.destroy();
       // Wait for SocketConnector to handle the events
-      await (Future.delayed(Duration(milliseconds: 10)));
+      await (Future.delayed(timeout));
       expect(connector.closed, true);
       await connector.done.timeout(Duration.zero);
     });
