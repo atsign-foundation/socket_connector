@@ -386,6 +386,12 @@ class SocketConnector {
   ///   to the bound server port [portA]
   /// - [onConnect] is called when [portA] has got a new connection and a
   ///   corresponding outbound socket has been created to [addressB]:[portB]
+  ///   and the two have been joined together
+  /// - [beforeJoining] is called when [portA] has got a new connection and a
+  ///   corresponding outbound socket has been created to [addressB]:[portB]
+  ///   but **before** they are joined together. This allows the code which
+  ///   called [serverToSocket] to take additional steps (such as setting new
+  ///   transformers rather than the ones which were provided initially)
   static Future<SocketConnector> serverToSocket(
       {
       /// Defaults to [InternetAddress.anyIPv4]
@@ -400,7 +406,9 @@ class SocketConnector {
       Duration timeout = SocketConnector.defaultTimeout,
       IOSink? logger,
       bool multi = false,
-      Function(Socket sideA, Socket sideB)? onConnect}) async {
+      @Deprecated("use beforeJoining instead")
+      Function(Socket socketA, Socket socketB)? onConnect,
+      Function(Side sideA, Side sideB)? beforeJoining}) async {
     IOSink logSink = logger ?? stderr;
     addressA ??= InternetAddress.anyIPv4;
 
@@ -428,6 +436,7 @@ class SocketConnector {
       // connect to the side 'B' address and port
       Socket sideBSocket = await Socket.connect(addressB, portB);
       Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
+      beforeJoining?.call(sideA, sideB);
       unawaited(connector.handleSingleConnection(sideB));
 
       onConnect?.call(sideASocket, sideBSocket);

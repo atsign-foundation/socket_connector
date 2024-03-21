@@ -312,9 +312,11 @@ void main() {
           verbose: true,
           timeout: Duration(milliseconds: 100),
           multi: true,
-          onConnect: (Socket sideA, Socket sideB) {
+          beforeJoining: (Side sideA, Side sideB) {
             serverConnections++;
             print('SocketConnector.serverToSocket onConnect called back');
+            sideA.transformer = aToB;
+            sideB.transformer = bToA;
           });
       expect(connector.connections.isEmpty, true);
 
@@ -357,14 +359,14 @@ void main() {
         // Wait for the sockets to send and receive data
         await Future.delayed(Duration(milliseconds: 10));
 
-        socketA.write('hello world from side A');
+        socketA.write('hello world');
         expect(currentSocketB != null, true);
-        currentSocketB?.write('hello world from side B');
+        currentSocketB?.write('hello world');
         // Wait for the sockets to send and receive data
         await Future.delayed(Duration(milliseconds: 10));
 
-        expect(rcvdA.last, "${aSockets.length}: hello world from side B");
-        expect(rcvdB.last, "${bSockets.length}: hello world from side A");
+        expect(rcvdA.last, "${aSockets.length}: from B: hello world");
+        expect(rcvdB.last, "${bSockets.length}: from A: hello world");
         expect(rcvdA.length, i + 1);
         expect(rcvdB.length, i + 1);
       }
