@@ -1,3 +1,9 @@
+## 2.2.0
+
+- feat: Enhance serverToSocket adding optional parameter `beforeJoining` which
+  will be called before a socket pair is actually joined together. Thus,
+  different transformers can be used for each socket pair.
+
 ## 2.1.0
 - Added `multi` parameter to `SocketConnector.serverToSocket` - whether to
   create new connections on the "B" side every time there is a new "A" side

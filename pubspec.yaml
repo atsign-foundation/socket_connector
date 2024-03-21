@@ -1,7 +1,7 @@
 name: socket_connector
 description: Package for joining sockets together to create socket relays.
 
-version: 2.1.0
+version: 2.2.0
 repository: https://github.com/cconstab/socket_connector
 
 environment:
