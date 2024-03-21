@@ -315,8 +315,8 @@ void main() {
           beforeJoining: (Side sideA, Side sideB) {
             serverConnections++;
             print('SocketConnector.serverToSocket onConnect called back');
-            sideA.transformer=aToB;
-            sideB.transformer=bToA;
+            sideA.transformer = aToB;
+            sideB.transformer = bToA;
           });
       expect(connector.connections.isEmpty, true);
 

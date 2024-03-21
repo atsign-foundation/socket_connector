@@ -405,8 +405,8 @@ class SocketConnector {
     Duration timeout = SocketConnector.defaultTimeout,
     IOSink? logger,
     bool multi = false,
-    @Deprecated("use beforeJoining instead") Function(Socket socketA,
-        Socket socketB)? onConnect,
+    @Deprecated("use beforeJoining instead")
+    Function(Socket socketA, Socket socketB)? onConnect,
     Function(Side sideA, Side sideB)? beforeJoining,
   }) async {
     IOSink logSink = logger ?? stderr;
