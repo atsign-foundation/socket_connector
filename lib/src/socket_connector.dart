@@ -392,23 +392,23 @@ class SocketConnector {
   ///   but **before** they are joined together. This allows the code which
   ///   called [serverToSocket] to take additional steps (such as setting new
   ///   transformers rather than the ones which were provided initially)
-  static Future<SocketConnector> serverToSocket({
-    /// Defaults to [InternetAddress.anyIPv4]
-    InternetAddress? addressA,
-    int portA = 0,
-    required InternetAddress addressB,
-    required int portB,
-    DataTransformer? transformAtoB,
-    DataTransformer? transformBtoA,
-    bool verbose = false,
-    bool logTraffic = false,
-    Duration timeout = SocketConnector.defaultTimeout,
-    IOSink? logger,
-    bool multi = false,
-    @Deprecated("use beforeJoining instead")
-    Function(Socket socketA, Socket socketB)? onConnect,
-    Function(Side sideA, Side sideB)? beforeJoining,
-  }) async {
+  static Future<SocketConnector> serverToSocket(
+      {
+      /// Defaults to [InternetAddress.anyIPv4]
+      InternetAddress? addressA,
+      int portA = 0,
+      required InternetAddress addressB,
+      required int portB,
+      DataTransformer? transformAtoB,
+      DataTransformer? transformBtoA,
+      bool verbose = false,
+      bool logTraffic = false,
+      Duration timeout = SocketConnector.defaultTimeout,
+      IOSink? logger,
+      bool multi = false,
+      @Deprecated("use beforeJoining instead")
+      Function(Socket socketA, Socket socketB)? onConnect,
+      Function(Side sideA, Side sideB)? beforeJoining}) async {
     IOSink logSink = logger ?? stderr;
     addressA ??= InternetAddress.anyIPv4;
 
