@@ -1,0 +1,4 @@
+target 'SocketConnector' do
+  use_frameworks!
+  use_modular_headers!
+end
