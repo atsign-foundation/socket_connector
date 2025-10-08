@@ -87,11 +87,6 @@ class Side {
 
 enum SideState { open, closing, closed }
 
-//   final Map<String, dynamic> stats = {
-//     'ipAddresses':{'A':[],'B':[]},
-//     'socketPairs': 0,
-//     'connections'
-//   };
 class Stats {
   final Set<String> ipAddressesSideA = {};
   final Set<String> ipAddressesSideB = {};
