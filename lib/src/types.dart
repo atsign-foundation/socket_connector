@@ -100,8 +100,8 @@ class Stats {
   int bytesBtoA = 0;
 
   Map<String, dynamic> toJson() => {
-    'ipAddressesSideA': ipAddressesSideA,
-    'ipAddressesSideB': ipAddressesSideB,
+    'ipAddressesSideA': ipAddressesSideA.toList(),
+    'ipAddressesSideB': ipAddressesSideB.toList(),
     'numSocketPairs': numSocketPairs,
     'bytesAtoB': bytesAtoB,
     'bytesBtoA': bytesBtoA,
