@@ -1,3 +1,9 @@
+## 2.4.0
+
+- feat: add `stats` method to SocketConnector; returns stats like number of
+  sockets created in a session, bytes transferred in both directions, ip 
+  addresses used, etc
+
 ## 2.3.3
 
 - fix: ensure serverToSocket handles sockets in strict sequence as they are
