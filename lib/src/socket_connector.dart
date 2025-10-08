@@ -56,6 +56,8 @@ class SocketConnector {
   /// The established [Connection]s
   final List<Connection> connections = [];
 
+  final Stats stats = Stats();
+
   /// A [Side]s which are available for pairing with the next B side connections
   final List<Side> pendingA = [];
 
@@ -136,6 +138,9 @@ class SocketConnector {
     if (pendingA.isNotEmpty && pendingB.isNotEmpty) {
       Connection c = Connection(pendingA.removeAt(0), pendingB.removeAt(0));
       connections.add(c);
+      stats.ipAddressesSideA.add(c.sideA.remoteAddress);
+      stats.ipAddressesSideB.add(c.sideB.remoteAddress);
+      stats.numSocketPairs++;
       _log(chalk.brightBlue(
           'Added connection. There are now ${connections.length} connections.'));
 
@@ -150,6 +155,11 @@ class SocketConnector {
             (data) {
               try {
                 side.farSide!.socket.add(data);
+                if (side.isSideA) {
+                  stats.bytesAtoB += data.length;
+                } else {
+                  stats.bytesBtoA += data.length;
+                }
                 side.farSide!.sent += data.length;
                 if (side.state == SideState.closed &&
                     side.rcvd == side.farSide!.sent) {
@@ -180,6 +190,11 @@ class SocketConnector {
           }
           try {
             side.farSide!.sink.add(data);
+            if (side.isSideA) {
+              stats.bytesAtoB += data.length;
+            } else {
+              stats.bytesBtoA += data.length;
+            }
             if (side.farSide!.sink is Socket) {
               side.farSide!.sent += data.length;
               if (side.state == SideState.closed &&
@@ -212,7 +227,8 @@ class SocketConnector {
     }
     side.state = SideState.closed;
 
-    _log(chalk.brightBlue('_closeSide ${side.name}: RCVD: ${side.rcvd} bytes; SENT: ${side.sent} bytes'));
+    _log(chalk.brightBlue(
+        '_closeSide ${side.name}: RCVD: ${side.rcvd} bytes; SENT: ${side.sent} bytes'));
 
     Connection? connectionToRemove;
     for (final c in connections) {

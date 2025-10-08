@@ -57,6 +57,7 @@ class Side {
   SideState state = SideState.open;
   bool isSideA;
   Socket socket;
+  late String remoteAddress;
   late Stream<Uint8List> stream;
   late StreamSink<List<int>> sink;
   bool authenticated = false;
@@ -72,10 +73,32 @@ class Side {
   int rcvd = 0;
 
   String get name => isSideA ? 'A' : 'B';
+
   Side(this.socket, this.isSideA, {this.socketAuthVerifier, this.transformer}) {
     sink = socket;
     stream = socket;
+    try {
+      remoteAddress = socket.remoteAddress.address;
+    } catch (e) {
+      remoteAddress = 'n/a';
+    }
   }
 }
 
 enum SideState { open, closing, closed }
+
+class Stats {
+  final Set<String> ipAddressesSideA = {};
+  final Set<String> ipAddressesSideB = {};
+  int numSocketPairs = 0;
+  int bytesAtoB = 0;
+  int bytesBtoA = 0;
+
+  Map<String, dynamic> toJson() => {
+    'ipAddressesSideA': ipAddressesSideA.toList(),
+    'ipAddressesSideB': ipAddressesSideB.toList(),
+    'numSocketPairs': numSocketPairs,
+    'bytesAtoB': bytesAtoB,
+    'bytesBtoA': bytesBtoA,
+  };
+}
