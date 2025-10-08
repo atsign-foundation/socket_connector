@@ -98,4 +98,12 @@ class Stats {
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;
+
+  Map<String, dynamic> toJson() => {
+    'ipAddressesSideA': ipAddressesSideA,
+    'ipAddressesSideB': ipAddressesSideB,
+    'numSocketPairs': numSocketPairs,
+    'bytesAtoB': bytesAtoB,
+    'bytesBtoA': bytesBtoA,
+  };
 }
