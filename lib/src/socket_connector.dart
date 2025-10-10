@@ -321,7 +321,6 @@ class SocketConnector {
     Duration timeout = SocketConnector.defaultTimeout,
     Duration authTimeout = SocketConnector.defaultTimeout,
     IOSink? logger,
-    Function(Side sideA, Side sideB)? beforeJoining,
     int backlog = 0,
   }) async {
     IOSink logSink = logger ?? stderr;
