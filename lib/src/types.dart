@@ -114,15 +114,15 @@ class HostAndPort {
 }
 
 class Stats {
-  final Set<HostAndPort> connectionsSideA = {};
-  final Set<HostAndPort> connectionsSideB = {};
+  final Set<HostAndPort> socketsSideA = {};
+  final Set<HostAndPort> socketsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;
 
   Map<String, dynamic> toJson() => {
-        'connectionsSideA': connectionsSideA.toList(),
-        'connectionsSideB': connectionsSideB.toList(),
+        'socketsSideA': socketsSideA.toList(),
+        'socketsSideB': socketsSideB.toList(),
         'numSocketPairs': numSocketPairs,
         'bytesAtoB': bytesAtoB,
         'bytesBtoA': bytesBtoA,
@@ -133,13 +133,13 @@ class Stats {
       identical(this, other) ||
       other is Stats &&
           runtimeType == other.runtimeType &&
-          connectionsSideA == other.connectionsSideA &&
-          connectionsSideB == other.connectionsSideB &&
+          socketsSideA == other.socketsSideA &&
+          socketsSideB == other.socketsSideB &&
           numSocketPairs == other.numSocketPairs &&
           bytesAtoB == other.bytesAtoB &&
           bytesBtoA == other.bytesBtoA;
 
   @override
   int get hashCode => Object.hash(
-      connectionsSideA, connectionsSideB, numSocketPairs, bytesAtoB, bytesBtoA);
+      socketsSideA, socketsSideB, numSocketPairs, bytesAtoB, bytesBtoA);
 }

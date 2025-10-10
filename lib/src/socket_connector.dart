@@ -138,11 +138,11 @@ class SocketConnector {
     if (pendingA.isNotEmpty && pendingB.isNotEmpty) {
       Connection c = Connection(pendingA.removeAt(0), pendingB.removeAt(0));
       connections.add(c);
-      stats.connectionsSideA.add(HostAndPort(
+      stats.socketsSideA.add(HostAndPort(
         c.sideA.remoteHost,
         c.sideA.remotePort,
       ));
-      stats.connectionsSideB.add(HostAndPort(
+      stats.socketsSideB.add(HostAndPort(
         c.sideB.remoteHost,
         c.sideB.remotePort,
       ));
