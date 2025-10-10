@@ -24,6 +24,11 @@ class SocketConnector {
 
   bool gracePeriodPassed = false;
 
+  final StreamController<Connection> _csc =
+      StreamController<Connection>.broadcast();
+
+  Stream<Connection> get connectionStream => _csc.stream;
+
   SocketConnector({
     this.verbose = false,
     this.logTraffic = false,
@@ -138,6 +143,9 @@ class SocketConnector {
     if (pendingA.isNotEmpty && pendingB.isNotEmpty) {
       Connection c = Connection(pendingA.removeAt(0), pendingB.removeAt(0));
       connections.add(c);
+      if (!_csc.isClosed) {
+        _csc.add(c);
+      }
       stats.socketsSideA.add(HostAndPort(
         c.sideA.remoteHost,
         c.sideA.remotePort,
@@ -285,6 +293,7 @@ class SocketConnector {
 
     if (!_closedCompleter.isCompleted) {
       _closedCompleter.complete();
+      _csc.close();
       _log('closed');
     }
     for (final s in pendingA) {
