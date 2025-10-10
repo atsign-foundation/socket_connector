@@ -1,4 +1,4 @@
-## 2.4.0
+## 2.4.1
 
 - feat: add `stats` method to SocketConnector; returns stats like number of
   sockets created in a session, bytes transferred in both directions, ip 

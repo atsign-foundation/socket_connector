@@ -57,7 +57,8 @@ class Side {
   SideState state = SideState.open;
   bool isSideA;
   Socket socket;
-  late String remoteAddress;
+  late String remoteHost;
+  late int remotePort;
   late Stream<Uint8List> stream;
   late StreamSink<List<int>> sink;
   bool authenticated = false;
@@ -78,27 +79,67 @@ class Side {
     sink = socket;
     stream = socket;
     try {
-      remoteAddress = socket.remoteAddress.address;
+      remoteHost = socket.remoteAddress.address;
+      remotePort = socket.remotePort;
     } catch (e) {
-      remoteAddress = 'n/a';
+      remoteHost = 'n/a';
+      remotePort = -1;
     }
   }
 }
 
 enum SideState { open, closing, closed }
 
+class HostAndPort {
+  final String host;
+  final int port;
+
+  const HostAndPort(this.host, this.port);
+
+  Map<String, dynamic> toJson() => {
+        'host': host,
+        'port': port,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostAndPort &&
+          runtimeType == other.runtimeType &&
+          host == other.host &&
+          port == other.port;
+
+  @override
+  int get hashCode => Object.hash(host, port);
+}
+
 class Stats {
-  final Set<String> ipAddressesSideA = {};
-  final Set<String> ipAddressesSideB = {};
+  final Set<HostAndPort> connectionsSideA = {};
+  final Set<HostAndPort> connectionsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;
 
   Map<String, dynamic> toJson() => {
-    'ipAddressesSideA': ipAddressesSideA.toList(),
-    'ipAddressesSideB': ipAddressesSideB.toList(),
-    'numSocketPairs': numSocketPairs,
-    'bytesAtoB': bytesAtoB,
-    'bytesBtoA': bytesBtoA,
-  };
+        'connectionsSideA': connectionsSideA.toList(),
+        'connectionsSideB': connectionsSideB.toList(),
+        'numSocketPairs': numSocketPairs,
+        'bytesAtoB': bytesAtoB,
+        'bytesBtoA': bytesBtoA,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Stats &&
+          runtimeType == other.runtimeType &&
+          connectionsSideA == other.connectionsSideA &&
+          connectionsSideB == other.connectionsSideB &&
+          numSocketPairs == other.numSocketPairs &&
+          bytesAtoB == other.bytesAtoB &&
+          bytesBtoA == other.bytesBtoA;
+
+  @override
+  int get hashCode => Object.hash(
+      connectionsSideA, connectionsSideB, numSocketPairs, bytesAtoB, bytesBtoA);
 }

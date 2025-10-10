@@ -138,8 +138,14 @@ class SocketConnector {
     if (pendingA.isNotEmpty && pendingB.isNotEmpty) {
       Connection c = Connection(pendingA.removeAt(0), pendingB.removeAt(0));
       connections.add(c);
-      stats.ipAddressesSideA.add(c.sideA.remoteAddress);
-      stats.ipAddressesSideB.add(c.sideB.remoteAddress);
+      stats.connectionsSideA.add(HostAndPort(
+        c.sideA.remoteHost,
+        c.sideA.remotePort,
+      ));
+      stats.connectionsSideB.add(HostAndPort(
+        c.sideB.remoteHost,
+        c.sideB.remotePort,
+      ));
       stats.numSocketPairs++;
       _log(chalk.brightBlue(
           'Added connection. There are now ${connections.length} connections.'));
@@ -208,7 +214,7 @@ class SocketConnector {
             _log('(Error was $e; Stack trace follows\n$st', force: true);
             _closeSide(side.farSide!);
           }
-        }, onDone: () async {
+        }, onDone: () {
           _log('${side.stream.runtimeType}.onDone on side ${side.name}');
           _closeSide(side);
         }, onError: (error) {
@@ -221,6 +227,7 @@ class SocketConnector {
     }
   }
 
+  // ignore: strict_top_level_inference
   _closeSide(final Side side) async {
     if (side.state != SideState.open) {
       return;
