@@ -146,13 +146,13 @@ class SocketConnector {
       if (!_csc.isClosed) {
         _csc.add(c);
       }
-      stats.socketsSideA.add(SocketInfo(
-        c.sideA.remoteHost,
+      stats.socketsSideA.putIfAbsent(c.sideA.remoteHost, () => []);
+      stats.socketsSideA[c.sideA.remoteHost]!.add((
         c.sideA.remotePort,
         c.sideA.timestamp,
       ));
-      stats.socketsSideB.add(SocketInfo(
-        c.sideB.remoteHost,
+      stats.socketsSideB.putIfAbsent(c.sideB.remoteHost, () => []);
+      stats.socketsSideB[c.sideB.remoteHost]!.add((
         c.sideB.remotePort,
         c.sideB.timestamp,
       ));

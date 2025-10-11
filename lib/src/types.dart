@@ -92,42 +92,16 @@ class Side {
 
 enum SideState { open, closing, closed }
 
-class SocketInfo {
-  final String host;
-  final int port;
-  final DateTime timestamp;
-
-  const SocketInfo(this.host, this.port, this.timestamp);
-
-  Map<String, dynamic> toJson() => {
-        'host': host,
-        'port': port,
-        'timestamp': timestamp.toUtc().toIso8601String(),
-      };
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SocketInfo &&
-          runtimeType == other.runtimeType &&
-          host == other.host &&
-          port == other.port &&
-          timestamp == other.timestamp;
-
-  @override
-  int get hashCode => Object.hash(host, port, timestamp);
-}
-
 class Stats {
-  final Set<SocketInfo> socketsSideA = {};
-  final Set<SocketInfo> socketsSideB = {};
+  final Map<String, List<(int, DateTime)>> socketsSideA = {};
+  final Map<String, List<(int, DateTime)>> socketsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;
 
   Map<String, dynamic> toJson() => {
-        'socketsSideA': socketsSideA.toList(),
-        'socketsSideB': socketsSideB.toList(),
+        'socketsSideA': socketsSideA,
+        'socketsSideB': socketsSideB,
         'numSocketPairs': numSocketPairs,
         'bytesAtoB': bytesAtoB,
         'bytesBtoA': bytesBtoA,
