@@ -93,8 +93,8 @@ class Side {
 enum SideState { open, closing, closed }
 
 class Stats {
-  final Map<String, List<(int, String)>> socketsSideA = {};
-  final Map<String, List<(int, String)>> socketsSideB = {};
+  final Map<String, List> socketsSideA = {};
+  final Map<String, List> socketsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;
