@@ -59,6 +59,7 @@ class Side {
   Socket socket;
   late String remoteHost;
   late int remotePort;
+  late DateTime timestamp;
   late Stream<Uint8List> stream;
   late StreamSink<List<int>> sink;
   bool authenticated = false;
@@ -76,6 +77,7 @@ class Side {
   String get name => isSideA ? 'A' : 'B';
 
   Side(this.socket, this.isSideA, {this.socketAuthVerifier, this.transformer}) {
+    timestamp = DateTime.now().toUtc();
     sink = socket;
     stream = socket;
     try {
@@ -90,32 +92,35 @@ class Side {
 
 enum SideState { open, closing, closed }
 
-class HostAndPort {
+class SocketInfo {
   final String host;
   final int port;
+  final DateTime timestamp;
 
-  const HostAndPort(this.host, this.port);
+  const SocketInfo(this.host, this.port, this.timestamp);
 
   Map<String, dynamic> toJson() => {
         'host': host,
         'port': port,
+        'timestamp': timestamp.toUtc().toIso8601String(),
       };
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is HostAndPort &&
+      other is SocketInfo &&
           runtimeType == other.runtimeType &&
           host == other.host &&
-          port == other.port;
+          port == other.port &&
+          timestamp == other.timestamp;
 
   @override
-  int get hashCode => Object.hash(host, port);
+  int get hashCode => Object.hash(host, port, timestamp);
 }
 
 class Stats {
-  final Set<HostAndPort> socketsSideA = {};
-  final Set<HostAndPort> socketsSideB = {};
+  final Set<SocketInfo> socketsSideA = {};
+  final Set<SocketInfo> socketsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;

@@ -146,13 +146,15 @@ class SocketConnector {
       if (!_csc.isClosed) {
         _csc.add(c);
       }
-      stats.socketsSideA.add(HostAndPort(
+      stats.socketsSideA.add(SocketInfo(
         c.sideA.remoteHost,
         c.sideA.remotePort,
+        c.sideA.timestamp,
       ));
-      stats.socketsSideB.add(HostAndPort(
+      stats.socketsSideB.add(SocketInfo(
         c.sideB.remoteHost,
         c.sideB.remotePort,
+        c.sideB.timestamp,
       ));
       stats.numSocketPairs++;
       _log(chalk.brightBlue(
