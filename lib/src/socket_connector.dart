@@ -149,12 +149,12 @@ class SocketConnector {
       stats.socketsSideA.putIfAbsent(c.sideA.remoteHost, () => []);
       stats.socketsSideA[c.sideA.remoteHost]!.add((
         c.sideA.remotePort,
-        c.sideA.timestamp,
+        c.sideA.timestamp.toUtc().toIso8601String(),
       ));
       stats.socketsSideB.putIfAbsent(c.sideB.remoteHost, () => []);
       stats.socketsSideB[c.sideB.remoteHost]!.add((
         c.sideB.remotePort,
-        c.sideB.timestamp,
+        c.sideB.timestamp.toUtc().toIso8601String(),
       ));
       stats.numSocketPairs++;
       _log(chalk.brightBlue(
