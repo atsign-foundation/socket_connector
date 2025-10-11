@@ -92,9 +92,32 @@ class Side {
 
 enum SideState { open, closing, closed }
 
+class PortAndTimestamp {
+  final int port;
+  final DateTime timestamp;
+
+  PortAndTimestamp(this.port, this.timestamp);
+
+  Map<String, dynamic> toJson() => {
+        'port': port,
+        'timestamp': timestamp.toUtc().toIso8601String(),
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PortAndTimestamp &&
+          runtimeType == other.runtimeType &&
+          port == other.port &&
+          timestamp == other.timestamp;
+
+  @override
+  int get hashCode => Object.hash(port, timestamp);
+}
+
 class Stats {
-  final Map<String, List> socketsSideA = {};
-  final Map<String, List> socketsSideB = {};
+  final Map<String, List<PortAndTimestamp>> socketsSideA = {};
+  final Map<String, List<PortAndTimestamp>> socketsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;

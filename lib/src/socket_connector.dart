@@ -147,11 +147,12 @@ class SocketConnector {
         _csc.add(c);
       }
       stats.socketsSideA.putIfAbsent(c.sideA.remoteHost, () => []);
-      stats.socketsSideA[c.sideA.remoteHost]!.addAll(
-          [c.sideA.remotePort, c.sideA.timestamp.toUtc().toIso8601String()]);
+      stats.socketsSideA[c.sideA.remoteHost]!
+          .add(PortAndTimestamp(c.sideA.remotePort, c.sideA.timestamp));
+
       stats.socketsSideB.putIfAbsent(c.sideB.remoteHost, () => []);
-      stats.socketsSideB[c.sideB.remoteHost]!.addAll(
-          [c.sideB.remotePort, c.sideB.timestamp.toUtc().toIso8601String()]);
+      stats.socketsSideB[c.sideB.remoteHost]!
+          .add(PortAndTimestamp(c.sideB.remotePort, c.sideB.timestamp));
       stats.numSocketPairs++;
       _log(chalk.brightBlue(
           'Added connection. There are now ${connections.length} connections.'));
