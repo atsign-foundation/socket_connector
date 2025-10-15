@@ -57,7 +57,9 @@ class Side {
   SideState state = SideState.open;
   bool isSideA;
   Socket socket;
-  late String remoteAddress;
+  late String remoteHost;
+  late int remotePort;
+  late DateTime timestamp;
   late Stream<Uint8List> stream;
   late StreamSink<List<int>> sink;
   bool authenticated = false;
@@ -75,30 +77,71 @@ class Side {
   String get name => isSideA ? 'A' : 'B';
 
   Side(this.socket, this.isSideA, {this.socketAuthVerifier, this.transformer}) {
+    timestamp = DateTime.now().toUtc();
     sink = socket;
     stream = socket;
     try {
-      remoteAddress = socket.remoteAddress.address;
+      remoteHost = socket.remoteAddress.address;
+      remotePort = socket.remotePort;
     } catch (e) {
-      remoteAddress = 'n/a';
+      remoteHost = 'n/a';
+      remotePort = -1;
     }
   }
 }
 
 enum SideState { open, closing, closed }
 
+class PortAndTimestamp {
+  final int port;
+  final DateTime timestamp;
+
+  PortAndTimestamp(this.port, this.timestamp);
+
+  Map<String, dynamic> toJson() => {
+        'port': port,
+        'timestamp': timestamp.toUtc().toIso8601String(),
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PortAndTimestamp &&
+          runtimeType == other.runtimeType &&
+          port == other.port &&
+          timestamp == other.timestamp;
+
+  @override
+  int get hashCode => Object.hash(port, timestamp);
+}
+
 class Stats {
-  final Set<String> ipAddressesSideA = {};
-  final Set<String> ipAddressesSideB = {};
+  final Map<String, List<PortAndTimestamp>> socketsSideA = {};
+  final Map<String, List<PortAndTimestamp>> socketsSideB = {};
   int numSocketPairs = 0;
   int bytesAtoB = 0;
   int bytesBtoA = 0;
 
   Map<String, dynamic> toJson() => {
-    'ipAddressesSideA': ipAddressesSideA.toList(),
-    'ipAddressesSideB': ipAddressesSideB.toList(),
-    'numSocketPairs': numSocketPairs,
-    'bytesAtoB': bytesAtoB,
-    'bytesBtoA': bytesBtoA,
-  };
+        'socketsSideA': socketsSideA,
+        'socketsSideB': socketsSideB,
+        'numSocketPairs': numSocketPairs,
+        'bytesAtoB': bytesAtoB,
+        'bytesBtoA': bytesBtoA,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Stats &&
+          runtimeType == other.runtimeType &&
+          socketsSideA == other.socketsSideA &&
+          socketsSideB == other.socketsSideB &&
+          numSocketPairs == other.numSocketPairs &&
+          bytesAtoB == other.bytesAtoB &&
+          bytesBtoA == other.bytesBtoA;
+
+  @override
+  int get hashCode => Object.hash(
+      socketsSideA, socketsSideB, numSocketPairs, bytesAtoB, bytesBtoA);
 }

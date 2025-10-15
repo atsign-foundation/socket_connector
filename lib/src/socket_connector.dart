@@ -24,6 +24,11 @@ class SocketConnector {
 
   bool gracePeriodPassed = false;
 
+  final StreamController<Connection> _csc =
+      StreamController<Connection>.broadcast();
+
+  Stream<Connection> get connectionStream => _csc.stream;
+
   SocketConnector({
     this.verbose = false,
     this.logTraffic = false,
@@ -138,8 +143,16 @@ class SocketConnector {
     if (pendingA.isNotEmpty && pendingB.isNotEmpty) {
       Connection c = Connection(pendingA.removeAt(0), pendingB.removeAt(0));
       connections.add(c);
-      stats.ipAddressesSideA.add(c.sideA.remoteAddress);
-      stats.ipAddressesSideB.add(c.sideB.remoteAddress);
+      if (!_csc.isClosed) {
+        _csc.add(c);
+      }
+      stats.socketsSideA.putIfAbsent(c.sideA.remoteHost, () => []);
+      stats.socketsSideA[c.sideA.remoteHost]!
+          .add(PortAndTimestamp(c.sideA.remotePort, c.sideA.timestamp));
+
+      stats.socketsSideB.putIfAbsent(c.sideB.remoteHost, () => []);
+      stats.socketsSideB[c.sideB.remoteHost]!
+          .add(PortAndTimestamp(c.sideB.remotePort, c.sideB.timestamp));
       stats.numSocketPairs++;
       _log(chalk.brightBlue(
           'Added connection. There are now ${connections.length} connections.'));
@@ -208,7 +221,7 @@ class SocketConnector {
             _log('(Error was $e; Stack trace follows\n$st', force: true);
             _closeSide(side.farSide!);
           }
-        }, onDone: () async {
+        }, onDone: () {
           _log('${side.stream.runtimeType}.onDone on side ${side.name}');
           _closeSide(side);
         }, onError: (error) {
@@ -221,6 +234,7 @@ class SocketConnector {
     }
   }
 
+  // ignore: strict_top_level_inference
   _closeSide(final Side side) async {
     if (side.state != SideState.open) {
       return;
@@ -278,6 +292,7 @@ class SocketConnector {
 
     if (!_closedCompleter.isCompleted) {
       _closedCompleter.complete();
+      _csc.close();
       _log('closed');
     }
     for (final s in pendingA) {
