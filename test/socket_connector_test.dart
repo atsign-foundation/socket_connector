@@ -820,6 +820,65 @@ void main() {
       await connector.done.timeout(Duration.zero);
     });
   });
+
+  group('Keepalive tests', () {
+    // SO_KEEPALIVE level/option differs by platform.
+    RawSocketOption keepAliveOption() {
+      if (Platform.isLinux || Platform.isAndroid) {
+        return RawSocketOption(
+            0x1, 0x0009, Uint8List(4)); // SOL_SOCKET/SO_KEEPALIVE
+      }
+      // macOS, iOS, Windows
+      return RawSocketOption(0xffff, 0x0008, Uint8List(4));
+    }
+
+    bool keepAliveEnabled(Socket socket) {
+      final value = socket.getRawOption(keepAliveOption());
+      return value.any((b) => b != 0);
+    }
+
+    Future<SocketConnector> connectPair(SocketKeepAlive keepAlive) async {
+      SocketConnector connector = await SocketConnector.serverToServer(
+        portA: 0,
+        portB: 0,
+        timeout: Duration(milliseconds: 500),
+        keepAlive: keepAlive,
+        verbose: false,
+      );
+      await Socket.connect('localhost', connector.sideAPort!);
+      await Socket.connect('localhost', connector.sideBPort!);
+      // Wait for SocketConnector to pair them into a Connection
+      await Future.delayed(Duration(milliseconds: 20));
+      expect(connector.connections.length, 1);
+      return connector;
+    }
+
+    test('Keepalive enabled by default on both sides', () async {
+      SocketConnector connector = await connectPair(SocketKeepAlive.defaults);
+      Connection c = connector.connections.first;
+      expect(keepAliveEnabled(c.sideA.socket), isTrue);
+      expect(keepAliveEnabled(c.sideB.socket), isTrue);
+      connector.close();
+      await connector.done;
+    });
+
+    test('Keepalive can be disabled via override', () async {
+      SocketConnector connector = await connectPair(SocketKeepAlive.disabled);
+      Connection c = connector.connections.first;
+      expect(keepAliveEnabled(c.sideA.socket), isFalse);
+      expect(keepAliveEnabled(c.sideB.socket), isFalse);
+      connector.close();
+      await connector.done;
+    });
+
+    test('SocketKeepAlive defaults are idle 60, interval 10, count 5', () {
+      const k = SocketKeepAlive.defaults;
+      expect(k.enable, isTrue);
+      expect(k.idleSeconds, 60);
+      expect(k.intervalSeconds, 10);
+      expect(k.probeCount, 5);
+    });
+  });
 }
 
 Stream<List<int>> addPrefix(Stream<List<int>> source,

@@ -5,28 +5,43 @@ import 'package:chalkdart/chalk.dart';
 import 'package:mutex/mutex.dart';
 import 'package:socket_connector/src/types.dart';
 
-/// Typical usage is via the [serverToServer], [serverToSocket],
-/// [socketToSocket] and [socketToServer] methods which are different flavours
-/// of the same functionality - to relay information from one socket to another.
+/// Relays data between two TCP sockets - a "side A" and a "side B".
 ///
-/// - Upon creation, a [Timer] will be created for [timeout] duration. The
-///   timer callback, when it executes, calls [close] if [connections]
-//    is empty
-/// - When an established connection is closed, [close] will be called if
-///   [connections] is empty
-/// - New [Connection]s are added to [connections] when both
-///   [pendingA] and [pendingB] have
-///   at least one entry
-/// - When [verbose] is true, log messages will be logged to [logger]
-/// - When [logTraffic] is true, socket traffic will be logged to [logger]
+/// Typical usage is via the [serverToServer], [serverToSocket],
+/// [socketToSocket] and [socketToServer] factory methods, which are different
+/// flavours of the same functionality - to relay information from one socket to
+/// another. Each side is either a server (something connects *to* it) or a
+/// client (it connects *out*); the four factories cover every combination.
+///
+/// - [timeout] sets a grace period that starts at construction. A one-shot
+///   [Timer] fires when it elapses (see [gracePeriodPassed]): if no
+///   [Connection] is established by then, [close] is called. Until the grace
+///   period elapses the connector stays open even with zero [connections],
+///   giving clients time to connect.
+/// - Once the grace period has elapsed, [close] is called as soon as the last
+///   established [Connection] closes (i.e. [connections] becomes empty).
+/// - New [Connection]s are added to [connections] when both [pendingA] and
+///   [pendingB] have at least one entry.
+/// - Each socket is given TCP keep-alive settings as it is accepted or created,
+///   per [keepAlive] (defaults to [SocketKeepAlive.defaults]).
+/// - When [verbose] is true, log messages are logged to [logger].
+/// - When [logTraffic] is true, socket traffic is logged to [logger].
+/// - [connectionStream] emits each new [Connection]; [done] completes when the
+///   connector closes; [stats] accumulates per-session counters.
 class SocketConnector {
   static const defaultTimeout = Duration(seconds: 30);
 
-  bool gracePeriodPassed = false;
+  bool _gracePeriodPassed = false;
+
+  /// Whether the [timeout] grace period has elapsed. While false, the connector
+  /// will not auto-close when [connections] is empty; once true, it closes as
+  /// soon as [connections] becomes empty.
+  bool get gracePeriodPassed => _gracePeriodPassed;
 
   final StreamController<Connection> _csc =
       StreamController<Connection>.broadcast();
 
+  /// Emits each new [Connection] as it is established.
   Stream<Connection> get connectionStream => _csc.stream;
 
   SocketConnector({
@@ -34,11 +49,12 @@ class SocketConnector {
     this.logTraffic = false,
     this.timeout = defaultTimeout,
     this.authTimeout = defaultTimeout,
+    this.keepAlive = SocketKeepAlive.defaults,
     IOSink? logger,
   }) {
     this.logger = logger ?? stderr;
     Timer(timeout, () {
-      gracePeriodPassed = true;
+      _gracePeriodPassed = true;
       if (connections.isEmpty) {
         close();
       }
@@ -54,8 +70,11 @@ class SocketConnector {
   /// When true, socket traffic will be logged to [logger]
   bool logTraffic;
 
-  /// - Upon creation, a [Timer] will be created for [timeout] duration. The timer
-  ///   callback calls [close] if [connections] is empty
+  /// The grace period, starting at construction, during which the connector
+  /// waits for connections without auto-closing. A one-shot [Timer] fires when
+  /// it elapses and calls [close] if no [Connection] is then established;
+  /// thereafter [close] is called whenever [connections] becomes empty.
+  /// See [gracePeriodPassed].
   final Duration timeout;
 
   /// The established [Connection]s
@@ -69,9 +88,12 @@ class SocketConnector {
   /// B [Side]s which are available for pairing with the next A side connections
   final List<Side> pendingB = [];
 
-  /// Completes when either
-  /// 1. [connections] size goes from >0 to 0, or
-  /// 2. [timeout] has passed and  [connections] is empty
+  /// Completes when the connector closes ([close] is called). That happens
+  /// when:
+  /// 1. the [timeout] grace period elapses with no established [Connection], or
+  /// 2. the last established [Connection] closes after the grace period has
+  ///    elapsed (see [gracePeriodPassed]), or
+  /// 3. [close] is called explicitly.
   Future get done => _closedCompleter.future;
 
   /// Whether this SocketConnector is closed or not
@@ -94,17 +116,33 @@ class SocketConnector {
   /// How long to wait for a client to authenticate its self
   final Duration authTimeout;
 
-  /// Add a [Side] with optional [SocketAuthVerifier] and
-  /// [DataTransformer]
-  /// - If [socketAuthVerifier] provided, wait for socket to be authenticated
-  /// - All data from the corresponding 'far' side will be transformed by the
-  ///   [transformer] if supplied. For example: [socketToSocket] creates a
-  ///   [Side]s A and B, and has parameters `transformAtoB` and
-  ///   `transformBtoA`.
+  /// TCP keep-alive settings applied to every socket this connector accepts
+  /// or creates. Defaults to [SocketKeepAlive.defaults].
+  final SocketKeepAlive keepAlive;
+
+  /// Brings [thisSide] under management: applies [keepAlive] to its socket,
+  /// optionally authenticates it, and pairs it with a [Side] from the opposite
+  /// side to form a [Connection].
+  ///
+  /// - [keepAlive] is applied to `thisSide.socket` first, so it takes effect
+  ///   even while authentication is in progress.
+  /// - If `thisSide.socketAuthVerifier` is set, the socket must authenticate
+  ///   within [authTimeout] before any data is relayed; on failure the side is
+  ///   closed.
+  /// - Once authenticated, the side is added to [pendingA] or [pendingB]; when
+  ///   both have an entry a [Connection] is formed and emitted on
+  ///   [connectionStream]. Data from each side is rewritten by that side's
+  ///   `transformer` (if any) before being written to the far side.
+  ///
+  /// Throws [StateError] if the connector is already [closed].
   Future<void> handleSingleConnection(final Side thisSide) async {
     if (closed) {
       throw StateError('Connector is closed');
     }
+    // Apply TCP keep-alive to every socket as it is accepted or created. Every
+    // Side - whether from an inbound accept or an outbound connect - funnels
+    // through here, so this is the single place keep-alive needs to be set.
+    keepAlive.applyTo(thisSide.socket, onError: (m) => _log(m, force: true));
     unawaited(thisSide.socket.done
         .then((v) => _closeSide(thisSide))
         .catchError((err) => _closeSide(thisSide)));
@@ -283,6 +321,8 @@ class SocketConnector {
     }
   }
 
+  /// Closes both server sockets (if any), closes every pending and established
+  /// side, completes [done] and closes [connectionStream]. Idempotent.
   void close() {
     _serverSocketA?.close();
     _serverSocketA = null;
@@ -311,9 +351,22 @@ class SocketConnector {
     }
   }
 
-  /// Binds two Server sockets on specified Internet Addresses.
-  /// Ports on which to listen can be given but if not given a spare port will be found by the OS.
-  /// Finally relays data between sockets and optionally displays contents using the verbose flag
+  /// Binds two server sockets, one on each side, and relays data between the
+  /// sockets that connect to them.
+  ///
+  /// - Side A listens on [addressA]:[portA], side B on [addressB]:[portB].
+  ///   Each address defaults to [InternetAddress.anyIPv4]; a port of `0` (the
+  ///   default) lets the OS choose a spare port - read the chosen ports back
+  ///   from [sideAPort] / [sideBPort].
+  /// - [socketAuthVerifierA] / [socketAuthVerifierB] optionally authenticate
+  ///   the connection on each side before any data is relayed.
+  /// - [keepAlive] sets TCP keep-alive on every accepted socket; defaults to
+  ///   [SocketKeepAlive.defaults].
+  /// - [backlog] is passed through to [ServerSocket.bind].
+  /// - [timeout] is the grace period during which the connector waits for
+  ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
+  ///   [logger] (defaults to stderr).
   static Future<SocketConnector> serverToServer({
     /// Defaults to [InternetAddress.anyIPv4]
     InternetAddress? addressA,
@@ -328,6 +381,7 @@ class SocketConnector {
     SocketAuthVerifier? socketAuthVerifierB,
     Duration timeout = SocketConnector.defaultTimeout,
     Duration authTimeout = SocketConnector.defaultTimeout,
+    SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
     IOSink? logger,
     int backlog = 0,
   }) async {
@@ -340,6 +394,7 @@ class SocketConnector {
       logTraffic: logTraffic,
       timeout: timeout,
       authTimeout: authTimeout,
+      keepAlive: keepAlive,
       logger: logSink,
     );
     connector._serverSocketA = await ServerSocket.bind(
@@ -404,13 +459,21 @@ class SocketConnector {
     return (connector);
   }
 
-  /// - Creates socket to [portA] on [addressA]
-  /// - Binds to [portB] on [addressB]
-  /// - Listens for a socket connection on [portB] port and joins it to
-  ///   the 'A' side
+  /// Connects out for side A and listens for an inbound connection on side B,
+  /// then relays data between them.
   ///
-  /// - If [portB] is not provided then a port is chosen by the OS.
-  /// - [addressB] defaults to [InternetAddress.anyIPv4]
+  /// - Side A connects out to [addressA]:[portA].
+  /// - Side B binds and listens on [addressB]:[portB], and the inbound socket
+  ///   is joined to side A. If [portB] is `0` (the default) the OS chooses a
+  ///   spare port; [addressB] defaults to [InternetAddress.anyIPv4].
+  /// - [transformAtoB] / [transformBtoA] optionally rewrite the byte stream in
+  ///   each direction.
+  /// - [keepAlive] sets TCP keep-alive on every socket accepted or created;
+  ///   defaults to [SocketKeepAlive.defaults].
+  /// - [timeout] is the grace period during which the connector waits for
+  ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
+  ///   [logger] (defaults to stderr).
   static Future<SocketConnector> socketToServer({
     required InternetAddress addressA,
     required int portA,
@@ -423,6 +486,7 @@ class SocketConnector {
     bool verbose = false,
     bool logTraffic = false,
     Duration timeout = SocketConnector.defaultTimeout,
+    SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
     IOSink? logger,
   }) async {
     IOSink logSink = logger ?? stderr;
@@ -432,6 +496,7 @@ class SocketConnector {
       verbose: verbose,
       logTraffic: logTraffic,
       timeout: timeout,
+      keepAlive: keepAlive,
       logger: logSink,
     );
 
@@ -456,9 +521,21 @@ class SocketConnector {
     return (connector);
   }
 
-  /// - Creates socket to [portA] on [addressA]
-  /// - Creates socket to [portB] on [addressB]
-  /// - Relays data between the sockets
+  /// Connects out on both sides and relays data between the two sockets.
+  ///
+  /// - Side A connects to [addressA]:[portA], side B to [addressB]:[portB].
+  /// - [transformAtoB] / [transformBtoA] optionally rewrite the byte stream in
+  ///   each direction.
+  /// - [keepAlive] sets TCP keep-alive on both created sockets; defaults to
+  ///   [SocketKeepAlive.defaults].
+  /// - Pass an existing [connector] to relay through it instead of creating a
+  ///   new one; when supplied, [verbose], [logTraffic], [timeout], [keepAlive]
+  ///   and [logger] are taken from that connector and the values passed here
+  ///   are ignored.
+  /// - [timeout] is the grace period during which the connector waits for
+  ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
+  ///   [logger] (defaults to stderr).
   static Future<SocketConnector> socketToSocket({
     SocketConnector? connector,
     required InternetAddress addressA,
@@ -470,6 +547,7 @@ class SocketConnector {
     bool verbose = false,
     bool logTraffic = false,
     Duration timeout = SocketConnector.defaultTimeout,
+    SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
     IOSink? logger,
   }) async {
     IOSink logSink = logger ?? stderr;
@@ -477,6 +555,7 @@ class SocketConnector {
       verbose: verbose,
       logTraffic: logTraffic,
       timeout: timeout,
+      keepAlive: keepAlive,
       logger: logSink,
     );
 
@@ -504,22 +583,33 @@ class SocketConnector {
     return (connector);
   }
 
-  /// - Creates socket to [portB] on [addressB]
-  /// - Binds to [portA] on [addressA]
-  /// - Listens for a socket connection on [portA] port and joins it to
-  ///   the 'B' side
-  /// - If [portA] is not provided then a port is chosen by the OS.
-  /// - [addressA] defaults to [InternetAddress.anyIPv4]
-  /// - [multi] flag controls whether or not to allow multiple connections
-  ///   to the bound server port [portA]
-  /// - [onConnect] is called when [portA] has got a new connection and a
-  ///   corresponding outbound socket has been created to [addressB]:[portB]
-  ///   and the two have been joined together
-  /// - [beforeJoining] is called when [portA] has got a new connection and a
-  ///   corresponding outbound socket has been created to [addressB]:[portB]
-  ///   but **before** they are joined together. This allows the code which
-  ///   called [serverToSocket] to take additional steps (such as setting new
-  ///   transformers rather than the ones which were provided initially)
+  /// Listens for an inbound connection on side A and, for each one, connects
+  /// out on side B, then relays data between them.
+  ///
+  /// - Side A binds and listens on [addressA]:[portA]. If [portA] is `0` (the
+  ///   default) the OS chooses a spare port; [addressA] defaults to
+  ///   [InternetAddress.anyIPv4].
+  /// - For each inbound side A connection, side B connects out to
+  ///   [addressB]:[portB].
+  /// - [multi] controls whether more than one connection to the bound side A
+  ///   port [portA] is accepted; when false the server socket is closed after
+  ///   the first connection.
+  /// - [transformAtoB] / [transformBtoA] optionally rewrite the byte stream in
+  ///   each direction.
+  /// - [keepAlive] sets TCP keep-alive on every socket accepted or created;
+  ///   defaults to [SocketKeepAlive.defaults].
+  /// - [backlog] is passed through to [ServerSocket.bind].
+  /// - [beforeJoining] is called once side A has a new connection and the
+  ///   corresponding outbound side B socket to [addressB]:[portB] has been
+  ///   created, but **before** they are joined together. This lets the caller
+  ///   take additional steps (such as setting new transformers rather than the
+  ///   ones provided initially).
+  /// - [onConnect] is the deprecated equivalent of [beforeJoining], called
+  ///   **after** the two sides are joined.
+  /// - [timeout] is the grace period during which the connector waits for
+  ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
+  ///   [logger] (defaults to stderr).
   static Future<SocketConnector> serverToSocket(
       {
       /// Defaults to [InternetAddress.anyIPv4]
@@ -532,6 +622,7 @@ class SocketConnector {
       bool verbose = false,
       bool logTraffic = false,
       Duration timeout = SocketConnector.defaultTimeout,
+      SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
       IOSink? logger,
       bool multi = false,
       @Deprecated("use beforeJoining instead")
@@ -545,6 +636,7 @@ class SocketConnector {
       verbose: verbose,
       logTraffic: logTraffic,
       timeout: timeout,
+      keepAlive: keepAlive,
       logger: logSink,
     );
 

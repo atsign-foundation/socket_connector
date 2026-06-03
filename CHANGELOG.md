@@ -1,3 +1,12 @@
+## 2.5.0
+
+- feat: set TCP keep-alive options on every socket accepted or created. Enabled
+  by default (idle 60s, interval 10s, count 5); override via the new
+  `SocketKeepAlive` parameter on all `SocketConnector` factory methods
+- fix: `SocketConnector.gracePeriodPassed` is now a read-only getter (it used
+  to be a mutable field, so this is technically a breaking change, but mutable
+  never made any sense and nobody uses it that way)
+
 ## 2.4.1
 
 - feat: add `stats` method to SocketConnector; returns stats like number of

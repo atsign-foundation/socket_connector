@@ -23,20 +23,49 @@ all the tools you need to connect servers to servers and clients to clients.
 Why would you need this type of service? To create a rendezvous service that two
 clients can connect to for example or to join two servers with a shared client.
 Also included is a client to server, this acts as a simple TCP proxy and as with
-all the services you can optionally set the verbose flag in order to see 
-more info about what is happening, and the logTraffic flag in order to see the 
+all the services you can optionally set the verbose flag in order to see
+more info about what is happening, and the logTraffic flag in order to see the
 readable (ascii) characters that are being transmitted and received.
+
+The relay is created via one of four factory methods on `SocketConnector`,
+depending on whether each side is a server (something connects *to* us) or a
+client (we connect *out*):
+
+| Method           | Side A        | Side B        |
+|------------------|---------------|---------------|
+| `serverToServer` | binds/listens | binds/listens |
+| `serverToSocket` | binds/listens | connects out  |
+| `socketToServer` | connects out  | binds/listens |
+| `socketToSocket` | connects out  | connects out  |
+
+Other capabilities:
+
+- **Authentication** — pass a `SocketAuthVerifier` per side to gate a connection
+  before any data is relayed. See
+  [`example/socket_connector_with_authenticator.dart`](example/socket_connector_with_authenticator.dart).
+- **Transformers** — pass a `DataTransformer` (`transformAtoB` / `transformBtoA`)
+  to rewrite the byte stream in flight (compression, framing, etc.).
+- **Stats** — `connector.stats` reports sockets created, bytes relayed each way,
+  and the remote addresses seen during the session.
+- **Lifecycle** — `connector.connectionStream` emits each new `Connection`, and
+  `connector.done` completes when the connector closes. See
+  [`example/wait_for_connector_done_example.dart`](example/wait_for_connector_done_example.dart).
 
 ## Getting started
 
+```sh
 dart pub add socket_connector
+```
 
 ## Usage
 
 The following code will open two server sockets and connect them and display any
 traffic that goes between the sockets. You can test this using ncat to connect
 to the two listening ports in two sessions. You will see what is typed in one
-window appear in the other plus see the data on at the dart program.
+window appear in the other plus see the data via the Dart program.
+
+The snippets below assume `import 'dart:io';` (for `InternetAddress`) and
+`import 'package:socket_connector/socket_connector.dart';`.
 
 ```dart
   // Once running use ncat to check the sockets
@@ -58,6 +87,30 @@ window appear in the other plus see the data on at the dart program.
 
 [![asciicast](https://asciinema.org/a/cglnKVtH16DPwWfqGJXgPMCKn.svg)](https://asciinema.org/a/cglnKVtH16DPwWfqGJXgPMCKn)
 
+### TCP keep-alive
+
+Every socket the connector accepts or creates has TCP keep-alive enabled by
+default (idle 60s, interval 10s, count 5). Override it by passing a
+`SocketKeepAlive` to any of the factory methods (`serverToServer`,
+`socketToServer`, `socketToSocket`, `serverToSocket`):
+
+```dart
+  SocketConnector socketConnector = await SocketConnector.serverToServer(
+    addressA: InternetAddress.anyIPv4,
+    addressB: InternetAddress.anyIPv4,
+    portA: 9000,
+    portB: 8000,
+    keepAlive: SocketKeepAlive(
+      idleSeconds: 30,
+      intervalSeconds: 5,
+      probeCount: 4,
+    ),
+  );
+```
+
+Use `SocketKeepAlive.disabled` to turn keep-alive off. On Windows only
+`SO_KEEPALIVE` is set (with the system-default timings) because the per-probe
+tuning requires an ioctl that `dart:io` does not expose.
 
 ## Additional information
 
@@ -77,9 +130,3 @@ Excerpted from the SocketConnector class's documentation:
 /// - When [verbose] is true, log messages will be logged to [logger]
 /// - When [logTraffic] is true, socket traffic will be logged to [logger]
 ```
-
-TODO: Currently only `SocketConnector.serverToServer` handles more than one 
-pair of sockets in a given session; code needs to be added to `serverToSocket` 
-and `socketToServer` so that when a new connection is received to the 
-serverSocket, then a new connection is opened to the address and port on the 
-other side.
