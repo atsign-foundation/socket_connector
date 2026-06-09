@@ -92,6 +92,108 @@ class Side {
 
 enum SideState { open, closing, closed }
 
+/// TCP keep-alive configuration applied to every socket that a
+/// [SocketConnector] accepts or creates.
+///
+/// When [enable] is true, `SO_KEEPALIVE` is turned on and the per-connection
+/// probe timings are tuned:
+/// - probing starts after [idleSeconds] of idle time
+///   (`TCP_KEEPIDLE` on Linux/Android, `TCP_KEEPALIVE` on macOS/iOS),
+/// - a probe is then sent every [intervalSeconds] (`TCP_KEEPINTVL`),
+/// - and the connection is dropped after [probeCount] unacknowledged probes
+///   (`TCP_KEEPCNT`).
+///
+/// The package defaults are idle 60s, interval 10s, count 5; pass a custom
+/// instance to any of the [SocketConnector] factory methods to override.
+///
+/// On Windows only `SO_KEEPALIVE` is set (with the system-default timings),
+/// because the per-probe tuning requires the `SIO_KEEPALIVE_VALS` ioctl which
+/// `dart:io` does not expose.
+class SocketKeepAlive {
+  /// Whether `SO_KEEPALIVE` is enabled on the socket.
+  final bool enable;
+
+  /// Seconds a connection is idle before the first keep-alive probe is sent
+  /// (`TCP_KEEPIDLE` on Linux/Android, `TCP_KEEPALIVE` on macOS/iOS).
+  final int idleSeconds;
+
+  /// Seconds between successive keep-alive probes (`TCP_KEEPINTVL`).
+  final int intervalSeconds;
+
+  /// Number of unacknowledged probes before the connection is dropped
+  /// (`TCP_KEEPCNT`).
+  final int probeCount;
+
+  const SocketKeepAlive({
+    this.enable = true,
+    this.idleSeconds = 60,
+    this.intervalSeconds = 10,
+    this.probeCount = 5,
+  });
+
+  /// The package-wide defaults: enabled, idle 60s, interval 10s, count 5.
+  static const SocketKeepAlive defaults = SocketKeepAlive();
+
+  /// Keep-alive turned off entirely.
+  static const SocketKeepAlive disabled = SocketKeepAlive(enable: false);
+
+  /// Applies this configuration to [socket].
+  ///
+  /// Each option is set independently; a failure on one (e.g. an option the
+  /// running platform does not support) is reported via [onError] and does not
+  /// prevent the others from being applied.
+  void applyTo(Socket socket, {void Function(String message)? onError}) {
+    void warn(String message) {
+      if (onError != null) onError(message);
+    }
+
+    if (Platform.isMacOS || Platform.isIOS) {
+      // SOL_SOCKET = 0xffff, SO_KEEPALIVE = 0x0008
+      _trySet(socket, RawSocketOption.fromBool(0xffff, 0x0008, enable),
+          'SO_KEEPALIVE', warn);
+      if (enable) {
+        // IPPROTO_TCP = 6
+        _trySet(socket, RawSocketOption.fromInt(6, 0x10, idleSeconds),
+            'TCP_KEEPALIVE', warn);
+        _trySet(socket, RawSocketOption.fromInt(6, 0x101, intervalSeconds),
+            'TCP_KEEPINTVL', warn);
+        _trySet(socket, RawSocketOption.fromInt(6, 0x102, probeCount),
+            'TCP_KEEPCNT', warn);
+      }
+    } else if (Platform.isLinux || Platform.isAndroid) {
+      // SOL_SOCKET = 0x1, SO_KEEPALIVE = 0x0009
+      _trySet(socket, RawSocketOption.fromBool(0x1, 0x0009, enable),
+          'SO_KEEPALIVE', warn);
+      if (enable) {
+        // IPPROTO_TCP = 6
+        _trySet(socket, RawSocketOption.fromInt(6, 4, idleSeconds),
+            'TCP_KEEPIDLE', warn);
+        _trySet(socket, RawSocketOption.fromInt(6, 5, intervalSeconds),
+            'TCP_KEEPINTVL', warn);
+        _trySet(socket, RawSocketOption.fromInt(6, 6, probeCount),
+            'TCP_KEEPCNT', warn);
+      }
+    } else if (Platform.isWindows) {
+      // Only SO_KEEPALIVE can be set via setsockopt on Windows; the per-probe
+      // timings need the SIO_KEEPALIVE_VALS ioctl, which dart:io can't reach.
+      _trySet(socket, RawSocketOption.fromBool(0xffff, 0x0008, enable),
+          'SO_KEEPALIVE', warn);
+    } else {
+      warn('SocketKeepAlive: unsupported platform '
+          '${Platform.operatingSystem}');
+    }
+  }
+
+  void _trySet(Socket socket, RawSocketOption option, String name,
+      void Function(String) warn) {
+    try {
+      socket.setRawOption(option);
+    } catch (e) {
+      warn('SocketKeepAlive: failed to set $name: $e');
+    }
+  }
+}
+
 class PortAndTimestamp {
   final int port;
   final DateTime timestamp;
