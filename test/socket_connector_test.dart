@@ -967,6 +967,81 @@ void main() {
         () async {
       await expectThrottled(transformAtoB: (s) => s.map((d) => d));
     }, timeout: Timeout(Duration(seconds: 90)));
+
+    // Heavy flush churn must not lose or reorder data. The regression it
+    // guards: while [Socket.flush] holds the far socket bound, an add() that
+    // reached the socket threw "StreamSink is bound to a stream" and closed
+    // the side mid-stream. A slow, bursty reader keeps many flushes in flight
+    // while a fast writer sends many chunks; every byte must still arrive, in
+    // order. (The bound-race itself is timing- and buffer-size-dependent — it
+    // surfaces readily under the small socket buffers of a container and less
+    // so under a host's large auto-tuned buffers — so this asserts the
+    // invariant that must hold either way: no byte is lost or reordered.)
+    Future<void> expectIntactUnderFlushChurn({
+      Stream<List<int>> Function(Stream<List<int>>)? transformAtoB,
+    }) async {
+      const int chunk = 16 * 1024;
+      const int chunks = 512; // 8 MiB through a 256 KiB gate -> many flushes
+      SocketConnector.bufferHighWaterMark = 256 * 1024;
+
+      final received = BytesBuilder(copy: false);
+      final allReceived = Completer<void>();
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) {
+        final sub = s.listen((d) {
+          received.add(d);
+          if (received.length >= chunk * chunks && !allReceived.isCompleted) {
+            allReceived.complete();
+          }
+        });
+        // Bursty reader: repeatedly pause so the far send buffer fills and
+        // flush() stays in flight, then let it drain a little.
+        Timer.periodic(Duration(milliseconds: 6), (t) {
+          if (allReceived.isCompleted) {
+            t.cancel();
+            return;
+          }
+          sub.pause();
+          Timer(Duration(milliseconds: 3), sub.resume);
+        });
+      });
+
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        transformAtoB: transformAtoB,
+        verbose: false,
+      );
+
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      for (int i = 0; i < chunks; i++) {
+        // Each chunk filled with its index, so truncation or reordering shows.
+        writer.add(Uint8List(chunk)..fillRange(0, chunk, i & 0xff));
+      }
+      await writer.flush();
+
+      await allReceived.future.timeout(Duration(seconds: 60));
+      final bytes = received.takeBytes();
+      expect(bytes.length, chunk * chunks, reason: 'bytes lost or truncated');
+      for (int i = 0; i < chunks; i++) {
+        expect(bytes[i * chunk], i & 0xff,
+            reason: 'chunk $i corrupted or reordered');
+      }
+
+      await writer.close();
+      connector.close();
+      await destServer.close();
+    }
+
+    test('data stays intact under heavy flush churn (direct path)', () async {
+      await expectIntactUnderFlushChurn();
+    }, timeout: Timeout(Duration(seconds: 90)));
+
+    test('data stays intact under heavy flush churn (transformer)', () async {
+      await expectIntactUnderFlushChurn(transformAtoB: (s) => s.map((d) => d));
+    }, timeout: Timeout(Duration(seconds: 90)));
   });
 }
 

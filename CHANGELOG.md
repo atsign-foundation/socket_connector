@@ -1,3 +1,15 @@
+## 2.5.1
+
+- fix: the backpressure flush (added in 2.5.0) could race a socket write and
+  throw `Bad state: StreamSink is bound to a stream`, closing a relay side
+  mid-stream. `Socket.flush()` binds the sink while it runs, and a write could
+  still reach the socket during that window (a paused source can still replay
+  one buffered event; the close path also flushes a socket the far side is
+  writing to). Writes now route through a gate that treats the bound state as
+  transient — it stashes and replays the write once the socket is writable,
+  instead of tearing the side down. Surfaced most readily under the small
+  socket buffers of a container, where the flush genuinely blocks.
+
 ## 2.5.0
 
 - feat: bound in-process buffering with flush-gated backpressure. `Socket.add`

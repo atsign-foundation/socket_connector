@@ -209,8 +209,17 @@ class SocketConnector {
       for (final side in [thisSide, thisSide.farSide!]) {
         // Backpressure: reading from this side is paused once more than
         // [bufferHighWaterMark] bytes are queued on the far socket, and
-        // resumes when flush() reports the queue has drained.
+        // resumes when flush() reports the queue has drained. A [_FlushGate]
+        // owns the write-plus-flush so no add() can ever race a flush (see
+        // its doc comment for why a plain pause() is not enough).
         late final StreamSubscription<Uint8List> sourceSub;
+
+        void onWriteError(Object e, StackTrace st) {
+          _log('Failed to write to side ${side.farSide!.name} - closing',
+              force: true);
+          _log('(Error was $e; Stack trace follows\n$st', force: true);
+          _closeSide(side.farSide!);
+        }
 
         if (side.transformer != null) {
           // transformer is there to transform data originating FROM its side
@@ -226,47 +235,59 @@ class SocketConnector {
           );
           side.farSide!.sink = sc;
           Stream<List<int>> transformed = side.transformer!(sc.stream);
-          int unflushed = 0;
           late final StreamSubscription<List<int>> transformedSub;
-          transformedSub = transformed.listen(
-            (data) {
-              try {
-                side.farSide!.socket.add(data);
-                if (side.isSideA) {
-                  stats.bytesAtoB += data.length;
-                } else {
-                  stats.bytesBtoA += data.length;
-                }
-                side.farSide!.sent += data.length;
-                unflushed += data.length;
-                if (unflushed >= bufferHighWaterMark) {
-                  transformedSub.pause();
-                  side.farSide!.socket.flush().then((_) {
-                    unflushed = 0;
-                    transformedSub.resume();
-                  }, onError: (Object e) {
-                    // Broken socket: resume so the next add() lands on the
-                    // existing write-error path below and closes the side.
-                    unflushed = 0;
-                    transformedSub.resume();
-                  });
-                }
-                if (side.state == SideState.closed &&
-                    side.rcvd == side.farSide!.sent) {
-                  _closeSide(side.farSide!);
-                }
-              } catch (e, st) {
-                _log('Failed to write to side ${side.farSide!.name} - closing',
-                    force: true);
-                _log('(Error was $e; Stack trace follows\n$st', force: true);
+          final _FlushGate gate = _FlushGate(
+            socket: side.farSide!.socket,
+            pause: () => transformedSub.pause(),
+            resume: () => transformedSub.resume(),
+            onError: onWriteError,
+            write: (List<int> data) {
+              side.farSide!.socket.add(data);
+              if (side.isSideA) {
+                stats.bytesAtoB += data.length;
+              } else {
+                stats.bytesBtoA += data.length;
+              }
+              side.farSide!.sent += data.length;
+              if (side.state == SideState.closed &&
+                  side.rcvd == side.farSide!.sent) {
                 _closeSide(side.farSide!);
               }
             },
+          );
+          transformedSub = transformed.listen(
+            gate.add,
             onDone: () => _closeSide(side),
             onError: (error) => _closeSide(side),
           );
         }
-        int unflushedDirect = 0;
+
+        // On the direct (no-transformer) path the sink IS the far socket, so a
+        // gate manages its backpressure. With a transformer the sink is the
+        // controller above and backpressure is handled there, so no gate here.
+        _FlushGate? directGate;
+        if (side.farSide!.sink is Socket) {
+          directGate = _FlushGate(
+            socket: side.farSide!.sink as Socket,
+            pause: () => sourceSub.pause(),
+            resume: () => sourceSub.resume(),
+            onError: onWriteError,
+            write: (List<int> data) {
+              side.farSide!.sink.add(data);
+              if (side.isSideA) {
+                stats.bytesAtoB += data.length;
+              } else {
+                stats.bytesBtoA += data.length;
+              }
+              side.farSide!.sent += data.length;
+              if (side.state == SideState.closed &&
+                  side.rcvd == side.farSide!.sent) {
+                _closeSide(side.farSide!);
+              }
+            },
+          );
+        }
+
         sourceSub = side.stream.listen((Uint8List data) {
           side.rcvd += data.length;
           if (logTraffic) {
@@ -279,38 +300,22 @@ class SocketConnector {
                   'B -> A : ${message.replaceAll(RegExp('[\x00-\x1F\x7F-\xFF]'), '*')}'));
             }
           }
-          try {
-            side.farSide!.sink.add(data);
-            if (side.isSideA) {
-              stats.bytesAtoB += data.length;
-            } else {
-              stats.bytesBtoA += data.length;
-            }
-            if (side.farSide!.sink is Socket) {
-              side.farSide!.sent += data.length;
-              unflushedDirect += data.length;
-              if (unflushedDirect >= bufferHighWaterMark) {
-                sourceSub.pause();
-                (side.farSide!.sink as Socket).flush().then((_) {
-                  unflushedDirect = 0;
-                  sourceSub.resume();
-                }, onError: (Object e) {
-                  // Broken socket: resume so the next add() lands on the
-                  // existing write-error path below and closes the side.
-                  unflushedDirect = 0;
-                  sourceSub.resume();
-                });
+          if (directGate != null) {
+            directGate.add(data);
+          } else {
+            // Sink is the transformer's controller; a plain add, since the
+            // controller's onPause wiring already carries backpressure back to
+            // this subscription.
+            try {
+              side.farSide!.sink.add(data);
+              if (side.isSideA) {
+                stats.bytesAtoB += data.length;
+              } else {
+                stats.bytesBtoA += data.length;
               }
-              if (side.state == SideState.closed &&
-                  side.rcvd == side.farSide!.sent) {
-                _closeSide(side.farSide!);
-              }
+            } catch (e, st) {
+              onWriteError(e, st);
             }
-          } catch (e, st) {
-            _log('Failed to write to side ${side.farSide!.name} - closing',
-                force: true);
-            _log('(Error was $e; Stack trace follows\n$st', force: true);
-            _closeSide(side.farSide!);
           }
         }, onDone: () {
           _log('${side.stream.runtimeType}.onDone on side ${side.name}');
@@ -751,5 +756,123 @@ class SocketConnector {
     });
 
     return (connector);
+  }
+}
+
+/// Serialises writes to a socket against any [Socket.flush] on that socket.
+///
+/// `Socket.flush()` binds the sink for the duration of the flush, so any
+/// `add()` that reaches the socket while a flush is in flight throws
+/// `Bad state: StreamSink is bound to a stream`. Two flushes can hold the
+/// socket bound:
+///
+/// 1. This gate's own high-water flush. Pausing the source is not enough to
+///    keep an `add()` off the socket during it: a socket delivers buffered
+///    data through microtask replay, and a `pause()` issued from inside that
+///    replay does not reliably suppress the straggler already scheduled.
+/// 2. A flush from elsewhere — notably the close path's `flush()` on a socket
+///    that this gate is still writing to from the far side.
+///
+/// So the gate routes every write through [add] and treats the bound state as
+/// transient: while a flush is in flight it stashes incoming chunks and
+/// replays them, in order, once the socket is writable again. No `add()` ever
+/// tears the side down for a flush that is simply still running. The stash
+/// stays small because the source is paused for the duration; it only holds
+/// the race stragglers.
+class _FlushGate {
+  _FlushGate({
+    required Socket socket,
+    required void Function(List<int> data) write,
+    required void Function() pause,
+    required void Function() resume,
+    required void Function(Object error, StackTrace stackTrace) onError,
+  })  : _socket = socket,
+        _write = write,
+        _pause = pause,
+        _resume = resume,
+        _onError = onError;
+
+  final Socket _socket;
+  final void Function(List<int> data) _write;
+  final void Function() _pause;
+  final void Function() _resume;
+  final void Function(Object error, StackTrace stackTrace) _onError;
+
+  int _unflushed = 0;
+  bool _flushing = false;
+  List<List<int>> _stash = <List<int>>[];
+
+  static bool _isSinkBound(Object e) =>
+      e is StateError && e.message.contains('bound to a stream');
+
+  void add(List<int> data) {
+    if (_flushing) {
+      _stash.add(data);
+      return;
+    }
+    try {
+      _write(data);
+    } catch (e, st) {
+      if (_isSinkBound(e)) {
+        // Some other flush (e.g. the close path) holds the socket bound.
+        // That is transient - stash and replay once it clears, rather than
+        // closing the side on a flush that is merely still in flight.
+        _stash.add(data);
+        _flushing = true;
+        _pause();
+        _waitForWritable();
+        return;
+      }
+      _onError(e, st);
+      return;
+    }
+    _unflushed += data.length;
+    if (_unflushed >= SocketConnector.bufferHighWaterMark) {
+      _flushing = true;
+      _pause();
+      _socket.flush().then(
+        (_) => _replay(afterFlush: true),
+        // Broken socket: replay anyway so a stashed chunk's write hits the
+        // real error path and closes the side.
+        onError: (Object _) => _replay(afterFlush: true),
+      );
+    }
+  }
+
+  /// Waits for a foreign flush to clear. `flush()` throws while the socket is
+  /// bound and completes once it is writable again, at which point the stash
+  /// is replayed. A destroyed socket does not throw here; its buffered write
+  /// surfaces the real error on replay.
+  void _waitForWritable() {
+    try {
+      _socket.flush().then(
+        (_) => _replay(afterFlush: false),
+        onError: (Object _) => _replay(afterFlush: false),
+      );
+    } on StateError catch (e) {
+      if (_isSinkBound(e)) {
+        Timer(const Duration(milliseconds: 1), _waitForWritable);
+      } else {
+        _replay(afterFlush: false);
+      }
+    }
+  }
+
+  void _replay({required bool afterFlush}) {
+    if (afterFlush) _unflushed = 0;
+    _flushing = false;
+    if (_stash.isEmpty) {
+      _resume();
+      return;
+    }
+    final List<List<int>> pending = _stash;
+    _stash = <List<int>>[];
+    for (final List<int> data in pending) {
+      // A replayed chunk may cross the mark again, or hit the bound state
+      // again; either way add() re-stashes the remainder into the fresh
+      // _stash, in order, and re-enters the wait.
+      add(data);
+    }
+    if (!_flushing) _resume();
   }
 }
