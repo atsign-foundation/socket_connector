@@ -879,6 +879,95 @@ void main() {
       expect(k.probeCount, 5);
     });
   });
+
+  group('Backpressure tests', () {
+    const int totalBytes = 32 * 1024 * 1024;
+    late int savedHighWaterMark;
+
+    setUp(() {
+      savedHighWaterMark = SocketConnector.bufferHighWaterMark;
+      SocketConnector.bufferHighWaterMark = 64 * 1024;
+    });
+
+    tearDown(() {
+      SocketConnector.bufferHighWaterMark = savedHighWaterMark;
+    });
+
+    /// Sends [totalBytes] through a connector whose destination reader is
+    /// paused, and asserts the writer is throttled (flush cannot complete)
+    /// rather than the connector buffering everything in memory. Then resumes
+    /// the reader and asserts every byte arrives.
+    Future<void> expectThrottled({
+      Stream<List<int>> Function(Stream<List<int>>)? transformAtoB,
+    }) async {
+      int destReceived = 0;
+      StreamSubscription<Uint8List>? destSub;
+      final destPaused = Completer<void>();
+
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) {
+        destSub = s.listen((d) => destReceived += d.length);
+        destSub!.pause();
+        destPaused.complete();
+      });
+
+      SocketConnector connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        transformAtoB: transformAtoB,
+        verbose: false,
+      );
+
+      final writer =
+          await Socket.connect(InternetAddress.loopbackIPv4, connector.sideAPort!);
+      final chunk = Uint8List(64 * 1024);
+      for (int sent = 0; sent < totalBytes; sent += chunk.length) {
+        writer.add(chunk);
+      }
+
+      await destPaused.future;
+      // With backpressure, the connector stops reading once the far socket's
+      // queue passes the high-water mark, the writer's kernel buffers fill,
+      // and this flush cannot complete. Without backpressure the connector
+      // drains all 32 MiB into its own memory at once and flush returns
+      // almost immediately. (One flush future, reused below: Socket.flush
+      // keeps the sink bound while pending, so a second call would throw.)
+      final flushed = writer.flush();
+      bool flushCompleted = false;
+      unawaited(flushed.then((_) => flushCompleted = true));
+      await Future.delayed(Duration(seconds: 3));
+      expect(flushCompleted, isFalse,
+          reason: 'writer drained while the destination was not reading:'
+              ' the connector buffered instead of throttling');
+
+      destSub!.resume();
+      await flushed;
+      await writer.close();
+
+      final deadline = DateTime.now().add(Duration(seconds: 30));
+      while (destReceived < totalBytes) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('Only $destReceived of $totalBytes bytes arrived');
+        }
+        await Future.delayed(Duration(milliseconds: 50));
+      }
+      expect(destReceived, totalBytes);
+
+      connector.close();
+      await destServer.close();
+    }
+
+    test('writer is throttled instead of buffering unboundedly (direct path)',
+        () async {
+      await expectThrottled();
+    }, timeout: Timeout(Duration(seconds: 90)));
+
+    test('writer is throttled instead of buffering unboundedly (transformer)',
+        () async {
+      await expectThrottled(transformAtoB: (s) => s.map((d) => d));
+    }, timeout: Timeout(Duration(seconds: 90)));
+  });
 }
 
 Stream<List<int>> addPrefix(Stream<List<int>> source,

@@ -1,5 +1,15 @@
 ## 2.5.0
 
+- feat: bound in-process buffering with flush-gated backpressure. `Socket.add`
+  never blocks, so a writer that outran the far side used to inflate the
+  relaying process's memory without limit (gigabytes observed under iperf3).
+  Once more than `SocketConnector.bufferHighWaterMark` bytes (default 4 MiB,
+  per relay direction) have been added to the far socket, the connector
+  pauses reading until `Socket.flush()` confirms the OS accepted them, so
+  TCP throttles the sender to the speed of the slowest link. On the
+  transformer path, pauses now propagate through the intermediate
+  `StreamController` to the source socket (provided the transformer forwards
+  pauses, as `stream.map` and friends do)
 - feat: set TCP keep-alive options on every socket accepted or created. Enabled
   by default (idle 60s, interval 10s, count 5); override via the new
   `SocketKeepAlive` parameter on all `SocketConnector` factory methods

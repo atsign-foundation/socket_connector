@@ -31,6 +31,17 @@ import 'package:socket_connector/src/types.dart';
 class SocketConnector {
   static const defaultTimeout = Duration(seconds: 30);
 
+  /// Backpressure high-water mark, in bytes, per relay direction.
+  ///
+  /// [Socket.add] never blocks: when the OS send buffer is full, bytes queue
+  /// in process memory without limit. Once more than this many bytes have
+  /// been added to a far-side socket without confirmation that the OS has
+  /// accepted them, the connector stops reading from the source socket until
+  /// [Socket.flush] completes. The source socket's kernel receive buffer then
+  /// fills and TCP closes the window, so a fast writer is throttled to the
+  /// speed of the slowest link instead of inflating this process's memory.
+  static int bufferHighWaterMark = 4 * 1024 * 1024;
+
   bool _gracePeriodPassed = false;
 
   /// Whether the [timeout] grace period has elapsed. While false, the connector
@@ -196,13 +207,28 @@ class SocketConnector {
           'Added connection. There are now ${connections.length} connections.'));
 
       for (final side in [thisSide, thisSide.farSide!]) {
+        // Backpressure: reading from this side is paused once more than
+        // [bufferHighWaterMark] bytes are queued on the far socket, and
+        // resumes when flush() reports the queue has drained.
+        late final StreamSubscription<Uint8List> sourceSub;
+
         if (side.transformer != null) {
           // transformer is there to transform data originating FROM its side
           // transformer's output will write to the SOCKET on the far side
-          StreamController<Uint8List> sc = StreamController<Uint8List>();
+          //
+          // A pause on the transformed stream's subscription propagates to
+          // sc.stream provided the transformer forwards pauses (stream.map
+          // and friends do); onPause/onResume extend it to the source socket
+          // subscription, which is what makes TCP throttle the sender.
+          StreamController<Uint8List> sc = StreamController<Uint8List>(
+            onPause: () => sourceSub.pause(),
+            onResume: () => sourceSub.resume(),
+          );
           side.farSide!.sink = sc;
           Stream<List<int>> transformed = side.transformer!(sc.stream);
-          transformed.listen(
+          int unflushed = 0;
+          late final StreamSubscription<List<int>> transformedSub;
+          transformedSub = transformed.listen(
             (data) {
               try {
                 side.farSide!.socket.add(data);
@@ -212,6 +238,19 @@ class SocketConnector {
                   stats.bytesBtoA += data.length;
                 }
                 side.farSide!.sent += data.length;
+                unflushed += data.length;
+                if (unflushed >= bufferHighWaterMark) {
+                  transformedSub.pause();
+                  side.farSide!.socket.flush().then((_) {
+                    unflushed = 0;
+                    transformedSub.resume();
+                  }, onError: (Object e) {
+                    // Broken socket: resume so the next add() lands on the
+                    // existing write-error path below and closes the side.
+                    unflushed = 0;
+                    transformedSub.resume();
+                  });
+                }
                 if (side.state == SideState.closed &&
                     side.rcvd == side.farSide!.sent) {
                   _closeSide(side.farSide!);
@@ -227,7 +266,8 @@ class SocketConnector {
             onError: (error) => _closeSide(side),
           );
         }
-        side.stream.listen((Uint8List data) {
+        int unflushedDirect = 0;
+        sourceSub = side.stream.listen((Uint8List data) {
           side.rcvd += data.length;
           if (logTraffic) {
             final message = String.fromCharCodes(data);
@@ -248,6 +288,19 @@ class SocketConnector {
             }
             if (side.farSide!.sink is Socket) {
               side.farSide!.sent += data.length;
+              unflushedDirect += data.length;
+              if (unflushedDirect >= bufferHighWaterMark) {
+                sourceSub.pause();
+                (side.farSide!.sink as Socket).flush().then((_) {
+                  unflushedDirect = 0;
+                  sourceSub.resume();
+                }, onError: (Object e) {
+                  // Broken socket: resume so the next add() lands on the
+                  // existing write-error path below and closes the side.
+                  unflushedDirect = 0;
+                  sourceSub.resume();
+                });
+              }
               if (side.state == SideState.closed &&
                   side.rcvd == side.farSide!.sent) {
                 _closeSide(side.farSide!);
