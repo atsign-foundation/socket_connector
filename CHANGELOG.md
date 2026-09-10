@@ -1,4 +1,4 @@
-## 2.6.0
+## 2.5.0
 
 - feat: bound in-process buffering with flush-gated backpressure. `Socket.add`
   never blocks, so a writer that outran the far side used to inflate the
@@ -10,9 +10,6 @@
   transformer path, pauses now propagate through the intermediate
   `StreamController` to the source socket (provided the transformer forwards
   pauses, as `stream.map` and friends do)
-
-## 2.5.0
-
 - feat: set TCP keep-alive options on every socket accepted or created. Enabled
   by default (idle 60s, interval 10s, count 5); override via the new
   `SocketKeepAlive` parameter on all `SocketConnector` factory methods
