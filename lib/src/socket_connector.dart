@@ -212,7 +212,7 @@ class SocketConnector {
         // resumes when flush() reports the queue has drained.
         late final StreamSubscription<Uint8List> sourceSub;
 
-        if (side.transformer != null) {
+        if (side.chunkTransformer == null && side.transformer != null) {
           // transformer is there to transform data originating FROM its side
           // transformer's output will write to the SOCKET on the far side
           //
@@ -280,15 +280,21 @@ class SocketConnector {
             }
           }
           try {
-            side.farSide!.sink.add(data);
+            // A ChunkTransformer runs inline here, ahead of the write it
+            // gates: if it throws, `data` is never written and the catch
+            // below closes the far side, exactly like a failed socket write.
+            final List<int> outData = side.chunkTransformer != null
+                ? side.chunkTransformer!.transform(data)
+                : data;
+            side.farSide!.sink.add(outData);
             if (side.isSideA) {
-              stats.bytesAtoB += data.length;
+              stats.bytesAtoB += outData.length;
             } else {
-              stats.bytesBtoA += data.length;
+              stats.bytesBtoA += outData.length;
             }
             if (side.farSide!.sink is Socket) {
-              side.farSide!.sent += data.length;
-              unflushedDirect += data.length;
+              side.farSide!.sent += outData.length;
+              unflushedDirect += outData.length;
               if (unflushedDirect >= bufferHighWaterMark) {
                 sourceSub.pause();
                 (side.farSide!.sink as Socket).flush().then((_) {
@@ -331,6 +337,7 @@ class SocketConnector {
       return;
     }
     side.state = SideState.closed;
+    side.chunkTransformer?.dispose();
 
     _log(chalk.brightBlue(
         '_closeSide ${side.name}: RCVD: ${side.rcvd} bytes; SENT: ${side.sent} bytes'));
