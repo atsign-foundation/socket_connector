@@ -821,6 +821,125 @@ void main() {
     });
   });
 
+  group('ChunkTransformer tests', () {
+    test('Test serverToSocket with a prefixing chunk transformer', () async {
+      ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
+      var timeout = Duration(milliseconds: 100);
+      SocketConnector connector = await SocketConnector.serverToSocket(
+        addressB: testExternalServer.address,
+        portB: testExternalServer.port,
+        timeout: timeout,
+        beforeJoining: (sideA, sideB) {
+          sideA.chunkTransformer =
+              _TestChunkTransformer(prefix: '$prefixFromA '.codeUnits);
+        },
+      );
+      expect(connector.connections.isEmpty, true);
+
+      String rcvdB = '';
+      late Socket socketB;
+      Completer readyB = Completer();
+      testExternalServer.listen((socket) {
+        socketB = socket;
+        readyB.complete();
+        socketB.listen((List<int> data) {
+          rcvdB = String.fromCharCodes(data);
+        });
+      });
+
+      Socket socketA = await Socket.connect('localhost', connector.sideAPort!);
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(Duration(milliseconds: 10)));
+      await readyB.future;
+      expect(connector.connections.isEmpty, false);
+
+      socketA.write('hello world from side A');
+      await Future.delayed(Duration(milliseconds: 10));
+
+      expect(rcvdB, '$prefixFromA hello world from side A');
+
+      socketA.destroy();
+      // Wait for SocketConnector to handle the events
+      await (Future.delayed(timeout));
+      expect(connector.closed, true);
+      await connector.done.timeout(Duration.zero);
+    });
+
+    test(
+        'a failed transform closes the far side and drops the offending '
+        'chunk', () async {
+      ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
+      var timeout = Duration(milliseconds: 100);
+      final xform = _TestChunkTransformer(poisonFirstByte: 0xFF);
+      SocketConnector connector = await SocketConnector.serverToSocket(
+        addressB: testExternalServer.address,
+        portB: testExternalServer.port,
+        timeout: timeout,
+        beforeJoining: (sideA, sideB) => sideA.chunkTransformer = xform,
+      );
+
+      final List<int> rcvdB = [];
+      late Socket socketB;
+      Completer readyB = Completer();
+      testExternalServer.listen((socket) {
+        socketB = socket;
+        readyB.complete();
+        socketB.listen((List<int> data) => rcvdB.addAll(data));
+      });
+
+      Socket socketA = await Socket.connect('localhost', connector.sideAPort!);
+      await Future.delayed(Duration(milliseconds: 10));
+      await readyB.future;
+
+      socketA.add([1, 2, 3]);
+      await Future.delayed(Duration(milliseconds: 10));
+      expect(rcvdB, [1, 2, 3]);
+
+      // Transform throws on this chunk: it must never reach the far side,
+      // and the far side must close, same as a failed socket write would.
+      socketA.add([0xFF, 9, 9]);
+      await Future.delayed(Duration(milliseconds: 50));
+      expect(rcvdB, [1, 2, 3]);
+      expect(connector.connections.isEmpty, true);
+
+      socketA.destroy();
+      await Future.delayed(timeout);
+      expect(connector.closed, true);
+      expect(xform.disposeCount, 1);
+    });
+
+    test('dispose is called exactly once when the side closes', () async {
+      ServerSocket testExternalServer = await ServerSocket.bind('127.0.0.1', 0);
+      var timeout = Duration(milliseconds: 100);
+      final xform = _TestChunkTransformer();
+      SocketConnector connector = await SocketConnector.serverToSocket(
+        addressB: testExternalServer.address,
+        portB: testExternalServer.port,
+        timeout: timeout,
+        beforeJoining: (sideA, sideB) => sideA.chunkTransformer = xform,
+      );
+
+      Completer readyB = Completer();
+      testExternalServer.listen((socket) {
+        readyB.complete();
+        socket.listen((_) {});
+      });
+
+      Socket socketA = await Socket.connect('localhost', connector.sideAPort!);
+      await Future.delayed(Duration(milliseconds: 10));
+      await readyB.future;
+
+      socketA.write('hello');
+      await Future.delayed(Duration(milliseconds: 10));
+      expect(xform.disposeCount, 0);
+
+      socketA.destroy();
+      await Future.delayed(timeout);
+      expect(connector.closed, true);
+      expect(xform.disposeCount, 1);
+    });
+  });
+
   group('Keepalive tests', () {
     // SO_KEEPALIVE level/option differs by platform.
     RawSocketOption keepAliveOption() {
@@ -899,6 +1018,7 @@ void main() {
     /// the reader and asserts every byte arrives.
     Future<void> expectThrottled({
       Stream<List<int>> Function(Stream<List<int>>)? transformAtoB,
+      ChunkTransformer Function()? chunkTransformerFactory,
     }) async {
       int destReceived = 0;
       StreamSubscription<Uint8List>? destSub;
@@ -917,10 +1037,14 @@ void main() {
         portB: destServer.port,
         transformAtoB: transformAtoB,
         verbose: false,
+        beforeJoining: chunkTransformerFactory == null
+            ? null
+            : (sideA, sideB) =>
+                sideA.chunkTransformer = chunkTransformerFactory(),
       );
 
-      final writer =
-          await Socket.connect(InternetAddress.loopbackIPv4, connector.sideAPort!);
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
       final chunk = Uint8List(64 * 1024);
       for (int sent = 0; sent < totalBytes; sent += chunk.length) {
         writer.add(chunk);
@@ -968,6 +1092,13 @@ void main() {
       await expectThrottled(transformAtoB: (s) => s.map((d) => d));
     }, timeout: Timeout(Duration(seconds: 90)));
 
+    test(
+        'writer is throttled instead of buffering unboundedly '
+        '(chunk transformer)', () async {
+      await expectThrottled(
+          chunkTransformerFactory: () => _TestChunkTransformer());
+    }, timeout: Timeout(Duration(seconds: 90)));
+
     // Heavy flush churn must not lose or reorder data. The regression it
     // guards: while [Socket.flush] holds the far socket bound, an add() that
     // reached the socket threw "StreamSink is bound to a stream" and closed
@@ -979,6 +1110,7 @@ void main() {
     // invariant that must hold either way: no byte is lost or reordered.)
     Future<void> expectIntactUnderFlushChurn({
       Stream<List<int>> Function(Stream<List<int>>)? transformAtoB,
+      ChunkTransformer Function()? chunkTransformerFactory,
     }) async {
       const int chunk = 16 * 1024;
       const int chunks = 512; // 8 MiB through a 256 KiB gate -> many flushes
@@ -1012,6 +1144,10 @@ void main() {
         portB: destServer.port,
         transformAtoB: transformAtoB,
         verbose: false,
+        beforeJoining: chunkTransformerFactory == null
+            ? null
+            : (sideA, sideB) =>
+                sideA.chunkTransformer = chunkTransformerFactory(),
       );
 
       final writer = await Socket.connect(
@@ -1042,6 +1178,20 @@ void main() {
     test('data stays intact under heavy flush churn (transformer)', () async {
       await expectIntactUnderFlushChurn(transformAtoB: (s) => s.map((d) => d));
     }, timeout: Timeout(Duration(seconds: 90)));
+
+    test(
+        'data stays intact under heavy flush churn '
+        '(chunk transformer, reused buffer)', () async {
+      // _ReusingChunkTransformer mirrors AesCtrFfiCipher.updateView: transform
+      // returns a view over one buffer it overwrites in place on every call.
+      // Stress coverage for that shape of transformer under heavy backpressure
+      // churn — not a mutation-verified pin on the gate's stash-copies-before-
+      // retaining fix (_FlushGate is private, so no public-API test can force
+      // the exact straggler race that fix guards against; see the doc comment
+      // on _FlushGate.add for why that fix is still correct by inspection).
+      await expectIntactUnderFlushChurn(
+          chunkTransformerFactory: () => _ReusingChunkTransformer());
+    }, timeout: Timeout(Duration(seconds: 90)));
   });
 
   group('Flush gate tests', () {
@@ -1069,7 +1219,8 @@ void main() {
       return holder;
     }
 
-    test('a write onto a bound socket is replayed, and the relay keeps '
+    test(
+        'a write onto a bound socket is replayed, and the relay keeps '
         'running afterwards', () async {
       const int chunk = 6 * 1024; // each chunk on its own crosses the mark
       final received = BytesBuilder(copy: false);
@@ -1234,4 +1385,48 @@ Stream<List<int>> reverser(Stream<List<int>> source,
   await for (final bytes in source) {
     yield reverseString(String.fromCharCodes(bytes)).codeUnits;
   }
+}
+
+/// A [ChunkTransformer] test double: prefixes each chunk, optionally throws
+/// on a chunk starting with [poisonFirstByte], and counts [dispose] calls.
+class _TestChunkTransformer implements ChunkTransformer {
+  _TestChunkTransformer({this.prefix = const [], this.poisonFirstByte});
+
+  final List<int> prefix;
+  final int? poisonFirstByte;
+  int disposeCount = 0;
+
+  @override
+  List<int> transform(List<int> data) {
+    if (poisonFirstByte != null &&
+        data.isNotEmpty &&
+        data[0] == poisonFirstByte) {
+      throw StateError('poison chunk (test-injected transform failure)');
+    }
+    return [...prefix, ...data];
+  }
+
+  @override
+  void dispose() {
+    disposeCount++;
+  }
+}
+
+/// A [ChunkTransformer] test double that mirrors a zero-copy FFI cipher:
+/// [transform] writes into one owned buffer and returns a view of it,
+/// aliased and overwritten on every call.
+class _ReusingChunkTransformer implements ChunkTransformer {
+  Uint8List _buf = Uint8List(0);
+
+  @override
+  List<int> transform(List<int> data) {
+    if (_buf.length < data.length) {
+      _buf = Uint8List(data.length);
+    }
+    _buf.setRange(0, data.length, data);
+    return Uint8List.sublistView(_buf, 0, data.length);
+  }
+
+  @override
+  void dispose() {}
 }

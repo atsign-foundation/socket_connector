@@ -221,7 +221,7 @@ class SocketConnector {
           _closeSide(side.farSide!);
         }
 
-        if (side.transformer != null) {
+        if (side.chunkTransformer == null && side.transformer != null) {
           // transformer is there to transform data originating FROM its side
           // transformer's output will write to the SOCKET on the far side
           //
@@ -301,7 +301,17 @@ class SocketConnector {
             }
           }
           if (directGate != null) {
-            directGate.add(data);
+            // A ChunkTransformer runs inline here, ahead of the write it
+            // gates: if it throws, `data` is never written and the catch
+            // below closes the far side, exactly like a failed socket write.
+            try {
+              final List<int> outData = side.chunkTransformer != null
+                  ? side.chunkTransformer!.transform(data)
+                  : data;
+              directGate.add(outData);
+            } catch (e, st) {
+              onWriteError(e, st);
+            }
           } else {
             // Sink is the transformer's controller; a plain add, since the
             // controller's onPause wiring already carries backpressure back to
@@ -360,6 +370,7 @@ class SocketConnector {
       return;
     }
     side.state = SideState.closed;
+    side.chunkTransformer?.dispose();
 
     _log(chalk.brightBlue(
         '_closeSide ${side.name}: RCVD: ${side.rcvd} bytes; SENT: ${side.sent} bytes'));
@@ -851,9 +862,16 @@ class _FlushGate {
 
   /// Writes [data], or stashes it if a flush is in flight or the socket is
   /// bound by someone else's flush.
+  ///
+  /// A stash always copies: [ChunkTransformer.transform] is allowed to
+  /// return a view over memory it reuses on its next call, on the promise
+  /// that [SocketConnector] reads it synchronously and never retains it
+  /// (see that contract's doc comment). A stash breaks "reads it
+  /// synchronously" by construction, so it takes its own copy up front
+  /// rather than pass that promise on to every [ChunkTransformer].
   void add(List<int> data) {
     if (_flushing) {
-      _stash.add(data);
+      _stash.add(List<int>.of(data));
       return;
     }
     try {
@@ -863,7 +881,7 @@ class _FlushGate {
         // Some other flush (e.g. the close path) holds the socket bound.
         // That is transient - stash and replay once it clears, rather than
         // closing the side on a flush that is merely still in flight.
-        _stash.add(data);
+        _stash.add(List<int>.of(data));
         _beginFlush();
         return;
       }
@@ -893,11 +911,11 @@ class _FlushGate {
   void _flushWhenWritable() {
     try {
       _socket.flush().then(
-        (_) => _replay(),
-        // Broken socket: replay anyway so a stashed chunk's write hits the
-        // real error path and closes the side.
-        onError: (Object _) => _replay(),
-      );
+            (_) => _replay(),
+            // Broken socket: replay anyway so a stashed chunk's write hits the
+            // real error path and closes the side.
+            onError: (Object _) => _replay(),
+          );
     } on StateError catch (e) {
       if (_isSinkBound(e)) {
         Timer(const Duration(milliseconds: 1), _flushWhenWritable);
