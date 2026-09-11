@@ -1126,6 +1126,56 @@ void main() {
       await destServer.close();
     }, timeout: Timeout(Duration(seconds: 60)));
 
+    test('a close that lands on a bound socket still closes the far side',
+        () async {
+      final destSockets = <Socket>[];
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) {
+        destSockets.add(s);
+        s.listen((_) {}, onError: (_) {});
+      });
+
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        verbose: false,
+      );
+      final Future<Connection> established = connector.connectionStream.first;
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      final Connection connection = await established;
+
+      final clientToldOfClose = Completer<void>();
+      void tellClient([Object? _]) {
+        if (!clientToldOfClose.isCompleted) {
+          clientToldOfClose.complete();
+        }
+      }
+
+      writer.listen((_) {}, onDone: tellClient, onError: tellClient);
+
+      final holder = bindSink(connection.sideB.socket);
+      await Future<void>.delayed(Duration(milliseconds: 100));
+
+      // The destination goes away while side B's sink is bound, so the close
+      // lands on a socket the connector cannot flush yet.
+      for (final s in destSockets) {
+        s.destroy();
+      }
+      await Future<void>.delayed(Duration(milliseconds: 300));
+      await holder.close();
+
+      await clientToldOfClose.future.timeout(Duration(seconds: 15),
+          onTimeout: () {
+        throw StateError('side A was never closed,'
+            ' so the client was never told the relay had gone');
+      });
+
+      connector.close();
+      await destServer.close();
+    }, timeout: Timeout(Duration(seconds: 60)));
+
   });
 }
 

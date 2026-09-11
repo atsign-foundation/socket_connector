@@ -330,6 +330,30 @@ class SocketConnector {
     }
   }
 
+  /// How long [_flushBeforeDestroy] waits for another flush to clear before
+  /// tearing the socket down regardless.
+  static const Duration _boundSinkWait = Duration(seconds: 5);
+
+  /// Flushes [socket], waiting out any flush already in flight on it.
+  ///
+  /// NOTE: [Socket.flush] throws synchronously while the sink is bound, so a
+  /// close landing during the relay's own flush has to retry. Destroying
+  /// straight away instead would drop whatever is still queued.
+  static Future<void> _flushBeforeDestroy(Socket socket) async {
+    final DateTime deadline = DateTime.now().add(_boundSinkWait);
+    while (true) {
+      try {
+        await socket.flush();
+        return;
+      } on StateError catch (e) {
+        if (!_isSinkBound(e) || DateTime.now().isAfter(deadline)) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    }
+  }
+
   // ignore: strict_top_level_inference
   _closeSide(final Side side) async {
     if (side.state != SideState.open) {
@@ -360,9 +384,18 @@ class SocketConnector {
       }
     }
 
+    // NOTE: the flush gets its own try. A socket that is bound (the relay's
+    // own flush still in flight) or already broken throws here, and that must
+    // not cost this side its destroy() nor the far side its close.
+    try {
+      _log(chalk.brightBlue('Flushing socket on side ${side.name}'));
+      await _flushBeforeDestroy(side.socket);
+    } catch (err) {
+      _log('Flush on side ${side.name} before close failed: $err');
+    }
+
     try {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
-      await side.socket.flush();
       side.socket.destroy();
       if (side.farSide != null && side.farSide!.state != SideState.closed) {
         if (side.rcvd == side.farSide!.sent) {

@@ -17,6 +17,12 @@
   gate's own flush now runs under the same guard as its writes instead of
   throwing into the stream listener, and a replay after that guard clears no
   longer leaves the unflushed byte count stale.
+- fix: a flush that failed while closing a side took the side's `destroy()` and
+  the close of the far side down with it, since all three shared one `try`. A
+  socket bound by the relay's own flush throws there, so the side stayed open
+  and the peer was never told the relay had gone. The close now waits out a
+  flush already in flight rather than dropping what is still queued, and tears
+  the socket down either way.
 
 ## 2.5.0
 
