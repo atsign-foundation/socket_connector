@@ -1176,6 +1176,33 @@ void main() {
       await destServer.close();
     }, timeout: Timeout(Duration(seconds: 60)));
 
+    test('the bound-sink error is still spelled the way the gate matches it',
+        () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((s) => s.listen((_) {}, onError: (_) {}));
+      final socket =
+          await Socket.connect(InternetAddress.loopbackIPv4, server.port);
+      final holder = StreamController<List<int>>();
+      unawaited(socket.addStream(holder.stream).catchError((Object e) => e));
+
+      Object? thrown;
+      try {
+        socket.add(const <int>[0x41]);
+      } catch (e) {
+        thrown = e;
+      }
+
+      // RAW LITERAL PIN. _isSinkBound reads this substring to tell a flush
+      // that is merely still running from a socket that is actually broken.
+      // If the SDK rewords it, the relay goes back to closing a side
+      // mid-stream, and nothing else in this suite would notice.
+      expect(thrown, isA<StateError>());
+      expect((thrown as StateError).message, contains('bound to a stream'));
+
+      await holder.close();
+      socket.destroy();
+      await server.close();
+    }, timeout: Timeout(Duration(seconds: 30)));
   });
 }
 

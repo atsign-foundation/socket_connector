@@ -818,9 +818,13 @@ bool _isSinkBound(Object e) =>
 /// So the gate routes every write through [add] and treats the bound state as
 /// transient: while a flush is in flight it stashes incoming chunks and
 /// replays them, in order, once the socket is writable again. No `add()` ever
-/// tears the side down for a flush that is simply still running. The stash
-/// stays small because the source is paused for the duration; it only holds
-/// the race stragglers.
+/// tears the side down for a flush that is simply still running.
+///
+/// The stash holds only what arrives after the source has been paused, so it
+/// stays small for any source that honours a pause (a socket, and any
+/// transformer that forwards pauses, as `stream.map` and friends do). A
+/// transformer that ignores pauses can grow it without bound, which is the
+/// same caveat the backpressure itself carries.
 class _FlushGate {
   _FlushGate({
     required Socket socket,
