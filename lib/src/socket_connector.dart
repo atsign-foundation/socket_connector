@@ -759,6 +759,15 @@ class SocketConnector {
   }
 }
 
+/// Whether [e] is the transient "sink is bound" [StateError] that
+/// [Socket.add], [Socket.flush] and [Socket.close] all throw while a flush or
+/// an `addStream` on that socket is still in flight.
+///
+/// NOTE: the message is the only discriminator the SDK offers; there is no
+/// error code. `test/socket_connector_test.dart` pins the wording.
+bool _isSinkBound(Object e) =>
+    e is StateError && e.message.contains('bound to a stream');
+
 /// Serialises writes to a socket against any [Socket.flush] on that socket.
 ///
 /// `Socket.flush()` binds the sink for the duration of the flush, so any
@@ -803,9 +812,8 @@ class _FlushGate {
   bool _paused = false;
   List<List<int>> _stash = <List<int>>[];
 
-  static bool _isSinkBound(Object e) =>
-      e is StateError && e.message.contains('bound to a stream');
-
+  /// Writes [data], or stashes it if a flush is in flight or the socket is
+  /// bound by someone else's flush.
   void add(List<int> data) {
     if (_flushing) {
       _stash.add(data);
@@ -819,9 +827,7 @@ class _FlushGate {
         // That is transient - stash and replay once it clears, rather than
         // closing the side on a flush that is merely still in flight.
         _stash.add(data);
-        _flushing = true;
-        _pauseSource();
-        _waitForWritable();
+        _beginFlush();
         return;
       }
       _onError(e, st);
@@ -829,50 +835,57 @@ class _FlushGate {
     }
     _unflushed += data.length;
     if (_unflushed >= SocketConnector.bufferHighWaterMark) {
-      _flushing = true;
-      _pauseSource();
-      _socket.flush().then(
-        (_) => _replay(afterFlush: true),
-        // Broken socket: replay anyway so a stashed chunk's write hits the
-        // real error path and closes the side.
-        onError: (Object _) => _replay(afterFlush: true),
-      );
+      _beginFlush();
     }
   }
 
-  /// Waits for a foreign flush to clear. `flush()` throws while the socket is
-  /// bound and completes once it is writable again, at which point the stash
-  /// is replayed. A destroyed socket does not throw here; its buffered write
-  /// surfaces the real error on replay.
-  void _waitForWritable() {
+  /// Pauses the source and flushes, replaying the stash when the flush
+  /// settles.
+  void _beginFlush() {
+    _flushing = true;
+    _pauseSource();
+    _flushWhenWritable();
+  }
+
+  /// Flushes, retrying while some other flush holds the socket bound.
+  ///
+  /// NOTE: `flush()` throws the bound-sink [StateError] synchronously, so it
+  /// belongs inside the guard for the same reason `add()` does. A destroyed
+  /// socket does not throw here; its buffered write surfaces the real error
+  /// on replay.
+  void _flushWhenWritable() {
     try {
       _socket.flush().then(
-        (_) => _replay(afterFlush: false),
-        onError: (Object _) => _replay(afterFlush: false),
+        (_) => _replay(),
+        // Broken socket: replay anyway so a stashed chunk's write hits the
+        // real error path and closes the side.
+        onError: (Object _) => _replay(),
       );
     } on StateError catch (e) {
       if (_isSinkBound(e)) {
-        Timer(const Duration(milliseconds: 1), _waitForWritable);
+        Timer(const Duration(milliseconds: 1), _flushWhenWritable);
       } else {
-        _replay(afterFlush: false);
+        _replay();
       }
     }
   }
 
-  void _replay({required bool afterFlush}) {
-    if (afterFlush) _unflushed = 0;
+  /// Writes the stash out and resumes the source, unless a replayed chunk has
+  /// started another flush.
+  void _replay() {
+    // Every path here follows a flush that either completed, leaving nothing
+    // unflushed, or failed, leaving a socket whose next write reports it.
+    _unflushed = 0;
     _flushing = false;
-    if (_stash.isEmpty) {
-      _resumeSource();
-      return;
-    }
-    final List<List<int>> pending = _stash;
-    _stash = <List<int>>[];
-    for (final List<int> data in pending) {
-      // A replayed chunk may cross the mark again, or hit the bound state
-      // again; either way add() re-stashes the remainder into the fresh
-      // _stash, in order, and re-enters the wait.
-      add(data);
+    if (_stash.isNotEmpty) {
+      final List<List<int>> pending = _stash;
+      _stash = <List<int>>[];
+      for (final List<int> data in pending) {
+        // A replayed chunk may cross the mark again, or hit the bound state
+        // again; either way add() re-stashes the remainder into the fresh
+        // _stash, in order, and re-enters the wait.
+        add(data);
+      }
     }
     if (!_flushing) _resumeSource();
   }

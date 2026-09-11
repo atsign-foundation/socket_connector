@@ -13,6 +13,10 @@
   it once. `StreamSubscription.pause()` is counted, so a replayed write that
   crossed the high water mark on its way out left that direction of the relay
   stopped for good, with both sockets still open and nothing logged.
+- fix: `Socket.flush()` throws the bound-sink error synchronously, so the flush
+  gate's own flush now runs under the same guard as its writes instead of
+  throwing into the stream listener, and a replay after that guard clears no
+  longer leaves the unflushed byte count stale.
 
 ## 2.5.0
 
