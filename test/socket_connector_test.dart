@@ -1043,6 +1043,167 @@ void main() {
       await expectIntactUnderFlushChurn(transformAtoB: (s) => s.map((d) => d));
     }, timeout: Timeout(Duration(seconds: 90)));
   });
+
+  group('Flush gate tests', () {
+    late int savedHighWaterMark;
+
+    setUp(() {
+      savedHighWaterMark = SocketConnector.bufferHighWaterMark;
+      SocketConnector.bufferHighWaterMark = 4 * 1024;
+    });
+
+    tearDown(() {
+      SocketConnector.bufferHighWaterMark = savedHighWaterMark;
+    });
+
+    /// Binds [socket]'s sink for as long as the returned controller is open.
+    ///
+    /// That is the state any in-flight `flush()` puts the socket in, and the
+    /// state the relay has to survive rather than close the side over. A real
+    /// flush only holds it for as long as the OS takes to accept the queued
+    /// bytes, which on a host with large socket buffers is too short to write
+    /// a test against; `addStream` holds it until asked to let go.
+    StreamController<List<int>> bindSink(Socket socket) {
+      final holder = StreamController<List<int>>();
+      unawaited(socket.addStream(holder.stream).catchError((Object e) => e));
+      return holder;
+    }
+
+    test('a write onto a bound socket is replayed, and the relay keeps '
+        'running afterwards', () async {
+      const int chunk = 6 * 1024; // each chunk on its own crosses the mark
+      final received = BytesBuilder(copy: false);
+      final allArrived = Completer<void>();
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) => s.listen((d) {
+            received.add(d);
+            if (received.length >= 2 * chunk && !allArrived.isCompleted) {
+              allArrived.complete();
+            }
+          }));
+
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        verbose: false,
+      );
+      final Future<Connection> established = connector.connectionStream.first;
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      final Connection connection = await established;
+
+      final holder = bindSink(connection.sideB.socket);
+      await Future<void>.delayed(Duration(milliseconds: 100));
+
+      writer.add(Uint8List(chunk)..fillRange(0, chunk, 0x41));
+      await writer.flush();
+      await Future<void>.delayed(Duration(milliseconds: 300));
+      expect(received.length, 0,
+          reason: 'nothing can reach the far side while its sink is bound');
+
+      await holder.close();
+      await Future<void>.delayed(Duration(milliseconds: 300));
+
+      // The replayed chunk crosses the high water mark on its way out, which
+      // starts a second flush while the source is already paused for the
+      // first. A pause that never gets its own resume stops this relay
+      // direction for good, and only this second chunk would notice.
+      writer.add(Uint8List(chunk)..fillRange(0, chunk, 0x42));
+      await writer.flush();
+
+      await allArrived.future.timeout(Duration(seconds: 15), onTimeout: () {
+        throw StateError('relay stopped after the replay:'
+            ' ${received.length} of ${2 * chunk} bytes arrived');
+      });
+      final bytes = received.takeBytes();
+      expect(bytes.length, 2 * chunk);
+      expect(bytes[0], 0x41, reason: 'replayed chunk lost');
+      expect(bytes[chunk], 0x42, reason: 'chunks out of order');
+
+      await writer.close();
+      connector.close();
+      await destServer.close();
+    }, timeout: Timeout(Duration(seconds: 60)));
+
+    test('a close that lands on a bound socket still closes the far side',
+        () async {
+      final destSockets = <Socket>[];
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) {
+        destSockets.add(s);
+        s.listen((_) {}, onError: (_) {});
+      });
+
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        verbose: false,
+      );
+      final Future<Connection> established = connector.connectionStream.first;
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      final Connection connection = await established;
+
+      final clientToldOfClose = Completer<void>();
+      void tellClient([Object? _]) {
+        if (!clientToldOfClose.isCompleted) {
+          clientToldOfClose.complete();
+        }
+      }
+
+      writer.listen((_) {}, onDone: tellClient, onError: tellClient);
+
+      final holder = bindSink(connection.sideB.socket);
+      await Future<void>.delayed(Duration(milliseconds: 100));
+
+      // The destination goes away while side B's sink is bound, so the close
+      // lands on a socket the connector cannot flush yet.
+      for (final s in destSockets) {
+        s.destroy();
+      }
+      await Future<void>.delayed(Duration(milliseconds: 300));
+      await holder.close();
+
+      await clientToldOfClose.future.timeout(Duration(seconds: 15),
+          onTimeout: () {
+        throw StateError('side A was never closed,'
+            ' so the client was never told the relay had gone');
+      });
+
+      connector.close();
+      await destServer.close();
+    }, timeout: Timeout(Duration(seconds: 60)));
+
+    test('the bound-sink error is still spelled the way the gate matches it',
+        () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((s) => s.listen((_) {}, onError: (_) {}));
+      final socket =
+          await Socket.connect(InternetAddress.loopbackIPv4, server.port);
+      final holder = StreamController<List<int>>();
+      unawaited(socket.addStream(holder.stream).catchError((Object e) => e));
+
+      Object? thrown;
+      try {
+        socket.add(const <int>[0x41]);
+      } catch (e) {
+        thrown = e;
+      }
+
+      // RAW LITERAL PIN. _isSinkBound reads this substring to tell a flush
+      // that is merely still running from a socket that is actually broken.
+      // If the SDK rewords it, the relay goes back to closing a side
+      // mid-stream, and nothing else in this suite would notice.
+      expect(thrown, isA<StateError>());
+      expect((thrown as StateError).message, contains('bound to a stream'));
+
+      await holder.close();
+      socket.destroy();
+      await server.close();
+    }, timeout: Timeout(Duration(seconds: 30)));
+  });
 }
 
 Stream<List<int>> addPrefix(Stream<List<int>> source,
