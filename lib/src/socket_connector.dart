@@ -800,6 +800,7 @@ class _FlushGate {
 
   int _unflushed = 0;
   bool _flushing = false;
+  bool _paused = false;
   List<List<int>> _stash = <List<int>>[];
 
   static bool _isSinkBound(Object e) =>
@@ -819,7 +820,7 @@ class _FlushGate {
         // closing the side on a flush that is merely still in flight.
         _stash.add(data);
         _flushing = true;
-        _pause();
+        _pauseSource();
         _waitForWritable();
         return;
       }
@@ -829,7 +830,7 @@ class _FlushGate {
     _unflushed += data.length;
     if (_unflushed >= SocketConnector.bufferHighWaterMark) {
       _flushing = true;
-      _pause();
+      _pauseSource();
       _socket.flush().then(
         (_) => _replay(afterFlush: true),
         // Broken socket: replay anyway so a stashed chunk's write hits the
@@ -862,7 +863,7 @@ class _FlushGate {
     if (afterFlush) _unflushed = 0;
     _flushing = false;
     if (_stash.isEmpty) {
-      _resume();
+      _resumeSource();
       return;
     }
     final List<List<int>> pending = _stash;
@@ -873,6 +874,25 @@ class _FlushGate {
       // _stash, in order, and re-enters the wait.
       add(data);
     }
-    if (!_flushing) _resume();
+    if (!_flushing) _resumeSource();
+  }
+
+  /// NOTE: [StreamSubscription.pause] is counted, so a pause that overlaps
+  /// another and never gets its own resume leaves the relay stopped for good
+  /// with both sockets still open. The latch keeps the depth at one.
+  void _pauseSource() {
+    if (_paused) {
+      return;
+    }
+    _paused = true;
+    _pause();
+  }
+
+  void _resumeSource() {
+    if (!_paused) {
+      return;
+    }
+    _paused = false;
+    _resume();
   }
 }

@@ -9,6 +9,10 @@
   transient — it stashes and replays the write once the socket is writable,
   instead of tearing the side down. Surfaced most readily under the small
   socket buffers of a container, where the flush genuinely blocks.
+- fix: the flush gate paused the source once per overlapping flush but resumed
+  it once. `StreamSubscription.pause()` is counted, so a replayed write that
+  crossed the high water mark on its way out left that direction of the relay
+  stopped for good, with both sockets still open and nothing logged.
 
 ## 2.5.0
 
