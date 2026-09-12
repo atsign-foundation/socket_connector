@@ -55,6 +55,8 @@ class SocketConnector {
   /// Emits each new [Connection] as it is established.
   Stream<Connection> get connectionStream => _csc.stream;
 
+  Timer? _timeoutTimer;
+
   SocketConnector({
     this.verbose = false,
     this.logTraffic = false,
@@ -64,7 +66,7 @@ class SocketConnector {
     IOSink? logger,
   }) {
     this.logger = logger ?? stderr;
-    Timer(timeout, () {
+    _timeoutTimer = Timer(timeout, () {
       _gracePeriodPassed = true;
       if (connections.isEmpty) {
         close();
@@ -180,6 +182,10 @@ class SocketConnector {
     if (!thisSide.authenticated) {
       _log('Authentication failed on side ${thisSide.name}', force: true);
       _closeSide(thisSide);
+      return;
+    }
+
+    if (thisSide.state == SideState.closed) {
       return;
     }
 
@@ -371,6 +377,8 @@ class SocketConnector {
     }
     side.state = SideState.closed;
     side.chunkTransformer?.dispose();
+    pendingA.remove(side);
+    pendingB.remove(side);
 
     _log(chalk.brightBlue(
         '_closeSide ${side.name}: RCVD: ${side.rcvd} bytes; SENT: ${side.sent} bytes'));
@@ -426,6 +434,7 @@ class SocketConnector {
   /// Closes both server sockets (if any), closes every pending and established
   /// side, completes [done] and closes [connectionStream]. Idempotent.
   void close() {
+    _timeoutTimer?.cancel();
     _serverSocketA?.close();
     _serverSocketA = null;
 
@@ -437,14 +446,18 @@ class SocketConnector {
       _csc.close();
       _log('closed');
     }
-    for (final s in pendingA) {
-      _closeSide(s);
-    }
+    
+    final pA = pendingA.toList();
     pendingA.clear();
-    for (final s in pendingB) {
+    for (final s in pA) {
       _closeSide(s);
     }
+
+    final pB = pendingB.toList();
     pendingB.clear();
+    for (final s in pB) {
+      _closeSide(s);
+    }
   }
 
   void _log(String s, {bool force = false}) {
@@ -673,11 +686,17 @@ class SocketConnector {
     if (verbose) {
       logSink.writeln('socket_connector: Connecting to $addressB:$portB');
     }
-    Socket sideBSocket = await Socket.connect(addressB, portB);
-    Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
-    unawaited(connector.handleSingleConnection(sideB).catchError((err) {
-      logSink.writeln('ERROR $err from handleSingleConnection on sideB $sideB');
-    }));
+    try {
+      Socket sideBSocket = await Socket.connect(addressB, portB);
+      Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
+      unawaited(connector.handleSingleConnection(sideB).catchError((err) {
+        logSink.writeln('ERROR $err from handleSingleConnection on sideB $sideB');
+      }));
+    } catch (e) {
+      sideA.socket.destroy();
+      connector._closeSide(sideA);
+      rethrow;
+    }
 
     if (verbose) {
       logSink.writeln('socket_connector: started');
@@ -767,21 +786,27 @@ class SocketConnector {
           logSink.writeln('Creating socket #${++connections} to the "B" side');
         }
         // connect to the side 'B' address and port
-        Socket sideBSocket = await Socket.connect(addressB, portB);
-        if (verbose) {
-          logSink.writeln('"B" side socket #$connections created');
-        }
-        Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
-        if (verbose) {
-          logSink.writeln('Calling the beforeJoining callback');
-        }
-        await beforeJoining?.call(sideA, sideB);
-        unawaited(connector.handleSingleConnection(sideB).catchError((err) {
-          logSink.writeln(
-              'ERROR $err from handleSingleConnection on sideB $sideB');
-        }));
+        try {
+          Socket sideBSocket = await Socket.connect(addressB, portB);
+          if (verbose) {
+            logSink.writeln('"B" side socket #$connections created');
+          }
+          Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
+          if (verbose) {
+            logSink.writeln('Calling the beforeJoining callback');
+          }
+          await beforeJoining?.call(sideA, sideB);
+          unawaited(connector.handleSingleConnection(sideB).catchError((err) {
+            logSink.writeln(
+                'ERROR $err from handleSingleConnection on sideB $sideB');
+          }));
 
-        onConnect?.call(sideASocket, sideBSocket);
+          onConnect?.call(sideASocket, sideBSocket);
+        } catch (e) {
+          logSink.writeln('ERROR connecting to side B or in beforeJoining: $e');
+          sideA.socket.destroy();
+          connector._closeSide(sideA);
+        }
       } finally {
         m.release();
       }
@@ -856,6 +881,7 @@ class _FlushGate {
   final void Function(Object error, StackTrace stackTrace) _onError;
 
   int _unflushed = 0;
+  int _stashedBytes = 0;
   bool _flushing = false;
   bool _paused = false;
   List<List<int>> _stash = <List<int>>[];
@@ -872,6 +898,10 @@ class _FlushGate {
   void add(List<int> data) {
     if (_flushing) {
       _stash.add(List<int>.of(data));
+      _stashedBytes += data.length;
+      if (_stashedBytes >= SocketConnector.bufferHighWaterMark * 2) {
+        _onError(StateError('Stash exceeded maximum limit (OOM protection)'), StackTrace.current);
+      }
       return;
     }
     try {
@@ -882,6 +912,7 @@ class _FlushGate {
         // That is transient - stash and replay once it clears, rather than
         // closing the side on a flush that is merely still in flight.
         _stash.add(List<int>.of(data));
+        _stashedBytes += data.length;
         _beginFlush();
         return;
       }
@@ -935,6 +966,7 @@ class _FlushGate {
     if (_stash.isNotEmpty) {
       final List<List<int>> pending = _stash;
       _stash = <List<int>>[];
+      _stashedBytes = 0;
       for (final List<int> data in pending) {
         // A replayed chunk may cross the mark again, or hit the bound state
         // again; either way add() re-stashes the remainder into the fresh
