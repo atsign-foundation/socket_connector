@@ -43,6 +43,39 @@ typedef DataTransformer = Stream<List<int>> Function(Stream<List<int>>);
 typedef SocketAuthVerifier = Future<(bool, Stream<Uint8List>?)> Function(
     Socket socket);
 
+/// Transforms one chunk of a [Side]'s outgoing data at a time, as a
+/// lower-overhead alternative to [DataTransformer] for a transform that
+/// needs no cross-chunk state beyond what it owns internally (e.g. a
+/// streaming cipher, which carries its own keystream position).
+///
+/// [DataTransformer] wraps the byte stream in an extra [StreamController]
+/// and subscription so [SocketConnector] can treat "transform" and "write to
+/// the far socket" as two independently-scheduled stages. When set on
+/// [Side.chunkTransformer] instead, [SocketConnector] calls [transform] and
+/// writes the result straight to the far side's socket within the same
+/// synchronous callback — no extra controller, subscription, or microtask
+/// hop. Takes priority over [DataTransformer] if both are set on one [Side].
+///
+/// [transform] may return a view onto memory it owns rather than a copy (an
+/// FFI cipher's zero-copy path, say): [SocketConnector] only ever reads the
+/// result synchronously, before writing it to the socket and returning, so
+/// it never observes a later call's reuse of that memory. A [transform]
+/// implementation that hands the same view to something asynchronous is
+/// making its own promise, not relying on one from [SocketConnector].
+///
+/// A thrown [transform] is treated exactly like a failed socket write: the
+/// offending chunk is not written, and the far side is closed.
+abstract class ChunkTransformer {
+  /// Transforms one chunk and returns the result to be written to the far
+  /// side's socket.
+  List<int> transform(List<int> data);
+
+  /// Releases anything [transform] allocated. [SocketConnector] calls this
+  /// once, when the owning [Side] closes; it must be safe to call more than
+  /// once.
+  void dispose();
+}
+
 class Connection {
   final Side sideA;
   final Side sideB;
@@ -67,6 +100,10 @@ class Side {
   Side? farSide;
   SocketAuthVerifier? socketAuthVerifier;
   DataTransformer? transformer;
+
+  /// See [ChunkTransformer]. Takes priority over [transformer] if both are
+  /// set.
+  ChunkTransformer? chunkTransformer;
 
   /// number of bytes written to this side's socket
   int sent = 0;
