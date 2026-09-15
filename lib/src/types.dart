@@ -57,11 +57,18 @@ typedef SocketAuthVerifier = Future<(bool, Stream<Uint8List>?)> Function(
 /// hop. Takes priority over [DataTransformer] if both are set on one [Side].
 ///
 /// [transform] may return a view onto memory it owns rather than a copy (an
-/// FFI cipher's zero-copy path, say): [SocketConnector] only ever reads the
-/// result synchronously, before writing it to the socket and returning, so
-/// it never observes a later call's reuse of that memory. A [transform]
-/// implementation that hands the same view to something asynchronous is
-/// making its own promise, not relying on one from [SocketConnector].
+/// FFI cipher's zero-copy path, say): [SocketConnector] copies the result
+/// before handing it to the far socket, so it never observes a later call's
+/// reuse of that memory.
+///
+/// NOTE: the copy is what makes the licence above safe, and it is not
+/// optional. `Socket.add` does not consume its argument synchronously — it
+/// retains the caller's list until the bytes reach the kernel, which spans
+/// event-loop turns whenever the far socket takes a partial write. Handing a
+/// reused view straight to it puts the *next* chunk's bytes on the wire in
+/// place of the pending one, silently. A [transform] implementation that
+/// hands the same view to something asynchronous of its own is making its own
+/// promise, not relying on one from [SocketConnector].
 ///
 /// A thrown [transform] is treated exactly like a failed socket write: the
 /// offending chunk is not written, and the far side is closed.
@@ -110,6 +117,15 @@ class Side {
 
   /// number of bytes received from this side's socket
   int rcvd = 0;
+
+  /// number of bytes this side's input has produced for the far side, after
+  /// any [transformer] or [chunkTransformer] has run.
+  ///
+  /// Equal to [rcvd] when neither transforms length, which is why the drain
+  /// checks compare this against the far side's [sent]: [rcvd] counts
+  /// pre-transform bytes and [sent] counts post-transform ones, so comparing
+  /// those two directly is never true for a length-changing transform.
+  int produced = 0;
 
   String get name => isSideA ? 'A' : 'B';
 

@@ -256,7 +256,7 @@ class SocketConnector {
               }
               side.farSide!.sent += data.length;
               if (side.state == SideState.closed &&
-                  side.rcvd == side.farSide!.sent) {
+                  side.produced == side.farSide!.sent) {
                 _closeSide(side.farSide!);
               }
             },
@@ -278,6 +278,9 @@ class SocketConnector {
             pause: () => sourceSub.pause(),
             resume: () => sourceSub.resume(),
             onError: onWriteError,
+            // A ChunkTransformer may hand back a view over memory it reuses,
+            // and the write below retains it past this callback.
+            copyBeforeWrite: side.chunkTransformer != null,
             write: (List<int> data) {
               side.farSide!.sink.add(data);
               if (side.isSideA) {
@@ -287,7 +290,7 @@ class SocketConnector {
               }
               side.farSide!.sent += data.length;
               if (side.state == SideState.closed &&
-                  side.rcvd == side.farSide!.sent) {
+                  side.produced == side.farSide!.sent) {
                 _closeSide(side.farSide!);
               }
             },
@@ -314,6 +317,7 @@ class SocketConnector {
               final List<int> outData = side.chunkTransformer != null
                   ? side.chunkTransformer!.transform(data)
                   : data;
+              side.produced += outData.length;
               directGate.add(outData);
             } catch (e, st) {
               onWriteError(e, st);
@@ -323,6 +327,10 @@ class SocketConnector {
             // controller's onPause wiring already carries backpressure back to
             // this subscription.
             try {
+              // The DataTransformer runs downstream of this add, so its
+              // output length is not known here; count the input, which is
+              // what the far side's `sent` matched before `produced` existed.
+              side.produced += data.length;
               side.farSide!.sink.add(data);
               if (side.isSideA) {
                 stats.bytesAtoB += data.length;
@@ -376,7 +384,6 @@ class SocketConnector {
       return;
     }
     side.state = SideState.closed;
-    side.chunkTransformer?.dispose();
     pendingA.remove(side);
     pendingB.remove(side);
 
@@ -417,7 +424,7 @@ class SocketConnector {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
       if (side.farSide != null && side.farSide!.state != SideState.closed) {
-        if (side.rcvd == side.farSide!.sent) {
+        if (side.produced == side.farSide!.sent) {
           _log(chalk.brightBlue(
               'Far side (${side.farSide?.name}) has received all data - will close it'));
           _closeSide(side.farSide!);
@@ -428,6 +435,13 @@ class SocketConnector {
       }
     } catch (err) {
       _log('_closeSide encountered error $err');
+    } finally {
+      // NOTE: disposed only once the socket is destroyed, never before the
+      // flush above. Nothing cancels this side's source subscription, so
+      // until destroy() it can still deliver a chunk — and transform() on a
+      // disposed transformer is a use-after-free for the FFI ciphers this
+      // API exists for. destroy() is what actually stops delivery.
+      side.chunkTransformer?.dispose();
     }
   }
 
@@ -869,17 +883,23 @@ class _FlushGate {
     required void Function() pause,
     required void Function() resume,
     required void Function(Object error, StackTrace stackTrace) onError,
+    bool copyBeforeWrite = false,
   })  : _socket = socket,
         _write = write,
         _pause = pause,
         _resume = resume,
-        _onError = onError;
+        _onError = onError,
+        _copyBeforeWrite = copyBeforeWrite;
 
   final Socket _socket;
   final void Function(List<int> data) _write;
   final void Function() _pause;
   final void Function() _resume;
   final void Function(Object error, StackTrace stackTrace) _onError;
+
+  /// Whether [add] must copy before writing, set when the data it gates comes
+  /// from a [ChunkTransformer]. See [add].
+  final bool _copyBeforeWrite;
 
   int _unflushed = 0;
   int _stashedBytes = 0;
@@ -890,12 +910,20 @@ class _FlushGate {
   /// Writes [data], or stashes it if a flush is in flight or the socket is
   /// bound by someone else's flush.
   ///
-  /// A stash always copies: [ChunkTransformer.transform] is allowed to
-  /// return a view over memory it reuses on its next call, on the promise
-  /// that [SocketConnector] reads it synchronously and never retains it
-  /// (see that contract's doc comment). A stash breaks "reads it
-  /// synchronously" by construction, so it takes its own copy up front
-  /// rather than pass that promise on to every [ChunkTransformer].
+  /// Both paths copy when [_copyBeforeWrite] is set, because
+  /// [ChunkTransformer.transform] is allowed to return a view over memory it
+  /// reuses on its next call (see that contract's doc comment) and neither
+  /// path consumes its argument before that next call can happen:
+  ///
+  /// - a stash holds the list across the flush it is waiting on;
+  /// - `Socket.add` holds it until the bytes reach the kernel, which spans
+  ///   event-loop turns whenever the socket takes a partial write. That is
+  ///   the ordinary condition for a congested relay, and it is not bounded by
+  ///   [SocketConnector.bufferHighWaterMark] — the mark only triggers a flush
+  ///   once enough bytes have been *written*, long after the first partial
+  ///   write has already retained a view.
+  ///
+  /// The two branches are mutually exclusive, so no chunk is copied twice.
   void add(List<int> data) {
     if (_flushing) {
       _stash.add(List<int>.of(data));
@@ -907,7 +935,7 @@ class _FlushGate {
       return;
     }
     try {
-      _write(data);
+      _write(_copyBeforeWrite ? Uint8List.fromList(data) : data);
     } catch (e, st) {
       if (_isSinkBound(e)) {
         // Some other flush (e.g. the close path) holds the socket bound.
