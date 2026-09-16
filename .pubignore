@@ -1,0 +1,7 @@
+# pub uses this file instead of .gitignore, so .gitignore's entries are
+# repeated here.
+.dart_tool/
+pubspec.lock
+
+# Local planning scratch.
+plans/

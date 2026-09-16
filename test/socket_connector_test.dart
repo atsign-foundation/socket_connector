@@ -1531,6 +1531,128 @@ void main() {
       connector.close();
       await destServer.close();
     }, timeout: Timeout(Duration(seconds: 60)));
+
+    test(
+        'a chunk transformer installed from connectionStream is still copied '
+        'before the write', () async {
+      const int chunk = 64 * 1024;
+      const int chunks = 48; // 3 MiB, under the 4 MiB high-water mark
+      const int total = chunk * chunks;
+
+      final received = BytesBuilder(copy: false);
+      final drained = Completer<void>();
+
+      final connector = await SocketConnector.serverToServer(
+        addressA: InternetAddress.loopbackIPv4,
+        addressB: InternetAddress.loopbackIPv4,
+        verbose: false,
+      );
+      addTearDown(connector.close);
+
+      final xform = _MarkingChunkTransformer();
+
+      // The gate is built in the same synchronous block that publishes the
+      // Connection, so this listener runs after it exists.
+      final installed = Completer<void>();
+      connector.connectionStream.listen((c) {
+        c.sideA.chunkTransformer = xform;
+        if (!installed.isCompleted) installed.complete();
+      });
+
+      final clientA = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      addTearDown(clientA.destroy);
+      final clientB = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideBPort!);
+      addTearDown(clientB.destroy);
+
+      await installed.future.timeout(Duration(seconds: 5),
+          onTimeout: () =>
+              throw StateError('chunk transformer was never installed'));
+
+      // Stalled reader: the far socket's send buffer fills, Socket.add starts
+      // taking partial writes and retains the caller's list across event-loop
+      // turns, which is the exposure a reused view has.
+      Timer(Duration(seconds: 3), () {
+        clientB.listen((d) {
+          received.add(d);
+          if (received.length >= total && !drained.isCompleted) {
+            drained.complete();
+          }
+        });
+      });
+
+      for (int i = 0; i < chunks; i++) {
+        clientA.add(Uint8List(chunk)..fillRange(0, chunk, i & 0xff));
+        // Spaced so the connector reads, and so transforms, roughly one chunk
+        // per turn. Dumping them in one go lets the socket coalesce 3 MiB into
+        // a handful of reads, which leaves too few transform() calls for the
+        // aliasing window to be hit.
+        await Future.delayed(Duration(milliseconds: 2));
+      }
+      await clientA.flush();
+
+      await drained.future.timeout(Duration(seconds: 60),
+          onTimeout: () =>
+              throw StateError('received ${received.length} of $total bytes'));
+
+      final bytes = received.takeBytes();
+      final want = xform.expected.takeBytes();
+
+      expect(xform.calls, greaterThan(20),
+          reason: 'the socket coalesced the writes into too few transform() '
+              'calls for the aliasing window to be exercised');
+      expect(bytes.length, want.length, reason: 'bytes lost or truncated');
+      for (int i = 0; i < bytes.length; i++) {
+        if (bytes[i] != want[i]) {
+          fail('byte $i of ${bytes.length}: transform() returned ${want[i]} '
+              'but ${bytes[i]} reached the wire. The transformer was installed '
+              'from connectionStream, after the gate was built.');
+        }
+      }
+    }, timeout: Timeout(Duration(seconds: 60)));
+  });
+
+  group('serverToSocket error path tests', () {
+    test('a throwing beforeJoining destroys the already-connected B socket',
+        () async {
+      final destClosed = Completer<void>();
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(destServer.close);
+      destServer.listen((s) {
+        unawaited(s.done.catchError((Object _) => s));
+        s.listen((_) {}, onDone: () {
+          if (!destClosed.isCompleted) destClosed.complete();
+        }, onError: (_) {
+          if (!destClosed.isCompleted) destClosed.complete();
+        });
+      });
+
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        verbose: false,
+        multi: true,
+        beforeJoining: (sideA, sideB) =>
+            throw StateError('cipher init failed (test-injected)'),
+      );
+      addTearDown(connector.close);
+
+      final client = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      addTearDown(client.destroy);
+      // Side A is destroyed by the catch under test, which resets this socket.
+      client.listen((_) {}, onError: (_) {}, onDone: () {});
+      unawaited(client.done.catchError((Object _) => client));
+      client.add([1, 2, 3]);
+
+      await destClosed.future.timeout(Duration(seconds: 10),
+          onTimeout: () => throw StateError(
+              'the B-side socket was still open after beforeJoining threw'));
+
+      expect(connector.connections, isEmpty);
+    }, timeout: Timeout(Duration(seconds: 30)));
   });
 }
 

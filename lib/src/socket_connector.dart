@@ -280,7 +280,7 @@ class SocketConnector {
             onError: onWriteError,
             // A ChunkTransformer may hand back a view over memory it reuses,
             // and the write below retains it past this callback.
-            copyBeforeWrite: side.chunkTransformer != null,
+            copyBeforeWrite: () => side.chunkTransformer != null,
             write: (List<int> data) {
               side.farSide!.sink.add(data);
               if (side.isSideA) {
@@ -801,8 +801,9 @@ class SocketConnector {
           logSink.writeln('Creating socket #${++connections} to the "B" side');
         }
         // connect to the side 'B' address and port
+        Socket? sideBSocket;
         try {
-          Socket sideBSocket = await Socket.connect(addressB, portB);
+          sideBSocket = await Socket.connect(addressB, portB);
           if (verbose) {
             logSink.writeln('"B" side socket #$connections created');
           }
@@ -819,6 +820,11 @@ class SocketConnector {
           onConnect?.call(sideASocket, sideBSocket);
         } catch (e) {
           logSink.writeln('ERROR connecting to side B or in beforeJoining: $e');
+          // NOTE: the B socket is connected before beforeJoining and onConnect
+          // run, and handleSingleConnection - which registers the close that
+          // would reclaim it - runs after. A throw in between leaves it with
+          // no owner, so destroy it here.
+          sideBSocket?.destroy();
           sideA.socket.destroy();
           connector._closeSide(sideA);
         }
@@ -852,6 +858,10 @@ class SocketConnector {
 bool _isSinkBound(Object e) =>
     e is StateError && e.message.contains('bound to a stream');
 
+/// The default for [_FlushGate.copyBeforeWrite]: the gated data is the source
+/// socket's own buffer, which nothing reuses.
+bool _neverCopy() => false;
+
 /// Serialises writes to a socket against any [Socket.flush] on that socket.
 ///
 /// `Socket.flush()` binds the sink for the duration of the flush, so any
@@ -883,7 +893,7 @@ class _FlushGate {
     required void Function() pause,
     required void Function() resume,
     required void Function(Object error, StackTrace stackTrace) onError,
-    bool copyBeforeWrite = false,
+    bool Function() copyBeforeWrite = _neverCopy,
   })  : _socket = socket,
         _write = write,
         _pause = pause,
@@ -897,9 +907,9 @@ class _FlushGate {
   final void Function() _resume;
   final void Function(Object error, StackTrace stackTrace) _onError;
 
-  /// Whether [add] must copy before writing, set when the data it gates comes
-  /// from a [ChunkTransformer]. See [add].
-  final bool _copyBeforeWrite;
+  /// Whether [add] must copy before writing, asked on every write because a
+  /// [ChunkTransformer] can be installed after this gate is built. See [add].
+  final bool Function() _copyBeforeWrite;
 
   int _unflushed = 0;
   int _stashedBytes = 0;
@@ -910,7 +920,6 @@ class _FlushGate {
   /// Writes [data], or stashes it if a flush is in flight or the socket is
   /// bound by someone else's flush.
   ///
-  /// Both paths copy when [_copyBeforeWrite] is set, because
   /// [ChunkTransformer.transform] is allowed to return a view over memory it
   /// reuses on its next call (see that contract's doc comment) and neither
   /// path consumes its argument before that next call can happen:
@@ -923,7 +932,9 @@ class _FlushGate {
   ///   once enough bytes have been *written*, long after the first partial
   ///   write has already retained a view.
   ///
-  /// The two branches are mutually exclusive, so no chunk is copied twice.
+  /// So a stash always copies, and the write path copies when
+  /// [_copyBeforeWrite] returns true. The two branches are mutually
+  /// exclusive, so no chunk is copied twice.
   void add(List<int> data) {
     if (_flushing) {
       _stash.add(List<int>.of(data));
@@ -935,7 +946,7 @@ class _FlushGate {
       return;
     }
     try {
-      _write(_copyBeforeWrite ? Uint8List.fromList(data) : data);
+      _write(_copyBeforeWrite() ? Uint8List.fromList(data) : data);
     } catch (e, st) {
       if (_isSinkBound(e)) {
         // Some other flush (e.g. the close path) holds the socket bound.

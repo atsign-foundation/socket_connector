@@ -1,28 +1,11 @@
-## 2.5.1
+## 2.6.0
 
-- fix: the backpressure flush (added in 2.5.0) could race a socket write and
-  throw `Bad state: StreamSink is bound to a stream`, closing a relay side
-  mid-stream. `Socket.flush()` binds the sink while it runs, and a write could
-  still reach the socket during that window (a paused source can still replay
-  one buffered event; the close path also flushes a socket the far side is
-  writing to). Writes now route through a gate that treats the bound state as
-  transient — it stashes and replays the write once the socket is writable,
-  instead of tearing the side down. Surfaced most readily under the small
-  socket buffers of a container, where the flush genuinely blocks.
-- fix: the flush gate paused the source once per overlapping flush but resumed
-  it once. `StreamSubscription.pause()` is counted, so a replayed write that
-  crossed the high water mark on its way out left that direction of the relay
-  stopped for good, with both sockets still open and nothing logged.
-- fix: `Socket.flush()` throws the bound-sink error synchronously, so the flush
-  gate's own flush now runs under the same guard as its writes instead of
-  throwing into the stream listener, and a replay after that guard clears no
-  longer leaves the unflushed byte count stale.
-- fix: a flush that failed while closing a side took the side's `destroy()` and
-  the close of the far side down with it, since all three shared one `try`. A
-  socket bound by the relay's own flush throws there, so the side stayed open
-  and the peer was never told the relay had gone. The close now waits out a
-  flush already in flight rather than dropping what is still queued, and tears
-  the socket down either way.
+- feat: `ChunkTransformer`, a synchronous per-chunk alternative to
+  `DataTransformer` for transforms that need no buffering.
+- fix: a failed side-B connect, or a throwing `beforeJoining`/`onConnect`, no
+  longer leaks the connected socket.
+- fix: the 2.5.0 backpressure flush could race a write and close a relay side
+  mid-stream, or stall one direction for good.
 
 ## 2.5.0
 
