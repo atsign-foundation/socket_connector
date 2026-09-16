@@ -1,17 +1,11 @@
 ## 2.6.0
 
 - feat: `ChunkTransformer`, a synchronous per-chunk alternative to
-  `DataTransformer` for transforms that need no buffering. It runs without a
-  stream-level mutex, and may return a view over memory it reuses — the
-  connector copies before handing that view to the socket.
-- fix: a side-B connect failure, or a throwing `beforeJoining`/`onConnect`, no
-  longer leaks the connected socket or leaves the relay unable to accept
-  further connections.
-- fix: the backpressure flush added in 2.5.0 could race a socket write and
-  throw `Bad state: StreamSink is bound to a stream`, closing a relay side
-  mid-stream or stalling one direction for good. Writes and closes now route
-  through a gate that waits out a flush in flight instead of tearing the side
-  down.
+  `DataTransformer` for transforms that need no buffering.
+- fix: a failed side-B connect, or a throwing `beforeJoining`/`onConnect`, no
+  longer leaks the connected socket.
+- fix: the 2.5.0 backpressure flush could race a write and close a relay side
+  mid-stream, or stall one direction for good.
 
 ## 2.5.0
 
