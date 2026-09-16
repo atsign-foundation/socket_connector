@@ -1355,6 +1355,183 @@ void main() {
       await server.close();
     }, timeout: Timeout(Duration(seconds: 30)));
   });
+
+  group('ChunkTransformer lifecycle tests', () {
+    // NOTE: this group deliberately does NOT lower bufferHighWaterMark, and
+    // keeps its traffic under the 4 MiB default. Lowering the mark - as the
+    // backpressure and flush-gate groups do - makes _beginFlush fire early
+    // and routes chunks through the gate's stash, which has always copied.
+    // The direct write path is only exercised below the mark, so a lowered
+    // mark would make the first test below pass whether or not it is fixed.
+
+    test(
+        'a transformer that reuses its buffer is not corrupted by the direct '
+        'write path', () async {
+      const int chunk = 64 * 1024;
+      const int chunks = 48; // 3 MiB, under the 4 MiB high-water mark
+      const int total = chunk * chunks;
+
+      final received = BytesBuilder(copy: false);
+      final drained = Completer<void>();
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) {
+        // Stalled reader: nothing is read for 3s, so the far socket's send
+        // buffer fills and Socket.add starts taking partial writes. That is
+        // what makes it retain the caller's list across event-loop turns,
+        // which is the whole exposure a reused view has.
+        Timer(Duration(seconds: 3), () {
+          s.listen((d) {
+            received.add(d);
+            if (received.length >= total && !drained.isCompleted) {
+              drained.complete();
+            }
+          });
+        });
+      });
+
+      final xform = _MarkingChunkTransformer();
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        verbose: false,
+        beforeJoining: (sideA, sideB) => sideA.chunkTransformer = xform,
+      );
+
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      for (int i = 0; i < chunks; i++) {
+        writer.add(Uint8List(chunk)..fillRange(0, chunk, i & 0xff));
+        // Spaced so the connector reads (and so transforms) roughly one chunk
+        // per turn. Dumping them in one go lets the socket coalesce 3 MiB into
+        // a handful of reads, which leaves too few transform() calls for the
+        // aliasing window to be hit reliably - the test then passes or fails
+        // on timing rather than on whether the bug is present.
+        await Future.delayed(Duration(milliseconds: 2));
+      }
+      await writer.flush();
+
+      await drained.future.timeout(Duration(seconds: 60));
+      final bytes = received.takeBytes();
+      final want = xform.expected.takeBytes();
+
+      expect(xform.calls, greaterThan(20),
+          reason: 'the socket coalesced the writes into too few transform() '
+              'calls for the aliasing window to be exercised; this test would '
+              'then pass on timing rather than on correctness');
+      expect(bytes.length, want.length, reason: 'bytes lost or truncated');
+      for (int i = 0; i < bytes.length; i++) {
+        if (bytes[i] != want[i]) {
+          fail('byte $i of ${bytes.length}: transform() returned ${want[i]} '
+              'but ${bytes[i]} reached the wire. A returned view was retained '
+              'past the next transform() call and overwritten in place.');
+        }
+      }
+
+      await writer.close();
+      connector.close();
+      await destServer.close();
+    }, timeout: Timeout(Duration(seconds: 90)));
+
+    test('transform is never called after dispose', () async {
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final Completer<Socket> destSocket = Completer<Socket>();
+      destServer.listen((s) {
+        s.listen((_) {});
+        if (!destSocket.isCompleted) destSocket.complete(s);
+      });
+
+      final xform = _TestChunkTransformer();
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        verbose: false,
+        beforeJoining: (sideA, sideB) => sideA.chunkTransformer = xform,
+      );
+
+      final Future<Connection> established = connector.connectionStream.first;
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      final Connection connection = await established;
+      writer.add('hello'.codeUnits);
+      await writer.flush();
+      await Future.delayed(Duration(milliseconds: 100));
+
+      // Hold side A's sink bound so _flushBeforeDestroy(A) cannot complete;
+      // _closeSide(A) then sits in its await for up to _boundSinkWait (5s)
+      // with A's source subscription still live and its socket undestroyed.
+      final holder = StreamController<List<int>>();
+      unawaited(connection.sideA.socket
+          .addStream(holder.stream)
+          .catchError((Object e) => e));
+
+      // Close the far end, so the cascade closes side A while A's own peer
+      // (the writer) is still healthy and still sending.
+      (await destSocket.future).destroy();
+      await Future.delayed(Duration(milliseconds: 100));
+
+      // Land chunks inside that window.
+      for (int i = 0; i < 5; i++) {
+        writer.add('more'.codeUnits);
+        await Future.delayed(Duration(milliseconds: 150));
+      }
+
+      expect(xform.usedAfterDispose, isFalse,
+          reason: 'transform() ran on a disposed transformer: for an FFI '
+              'cipher that is a use-after-free of the native context');
+
+      await holder.close();
+      writer.destroy();
+      connector.close();
+      await destServer.close();
+    }, timeout: Timeout(Duration(seconds: 60)));
+
+    test('a length-changing transform still closes the far side via the '
+        'cascade', () async {
+      // Before Side.produced existed, the drain checks compared side.rcvd
+      // (pre-transform) against the far side's sent (post-transform). A
+      // transform that changes length made that equality false forever, so
+      // _closeSide's cascade never fired and the far side sat open until the
+      // grace-period timeout mopped it up.
+      final destClosed = Completer<void>();
+      final destServer =
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      destServer.listen((s) {
+        s.listen((_) {}, onDone: () {
+          if (!destClosed.isCompleted) destClosed.complete();
+        });
+      });
+
+      final connector = await SocketConnector.serverToSocket(
+        addressB: InternetAddress.loopbackIPv4,
+        portB: destServer.port,
+        // Deliberately long: if the far side closes, it was the cascade that
+        // did it, not the grace period.
+        timeout: Duration(seconds: 30),
+        verbose: false,
+        beforeJoining: (sideA, sideB) => sideA.chunkTransformer =
+            _TestChunkTransformer(prefix: 'p:'.codeUnits),
+      );
+
+      final writer = await Socket.connect(
+          InternetAddress.loopbackIPv4, connector.sideAPort!);
+      writer.add('hello'.codeUnits);
+      await writer.flush();
+      await Future.delayed(Duration(milliseconds: 200));
+
+      // Side A's peer goes away, so _closeSide(A) runs and should cascade
+      // into closing side B.
+      writer.destroy();
+
+      // 5s << the connector's 30s grace period, so a timeout here means the
+      // cascade didn't fire - not that we didn't wait long enough for it.
+      await destClosed.future.timeout(Duration(seconds: 5));
+
+      connector.close();
+      await destServer.close();
+    }, timeout: Timeout(Duration(seconds: 60)));
+  });
 }
 
 Stream<List<int>> addPrefix(Stream<List<int>> source,
@@ -1396,8 +1573,15 @@ class _TestChunkTransformer implements ChunkTransformer {
   final int? poisonFirstByte;
   int disposeCount = 0;
 
+  /// Set if [transform] ran after [dispose]. For an FFI-backed transformer
+  /// that would be a use-after-free, so the connector must never do it.
+  bool usedAfterDispose = false;
+
   @override
   List<int> transform(List<int> data) {
+    if (disposeCount > 0) {
+      usedAfterDispose = true;
+    }
     if (poisonFirstByte != null &&
         data.isNotEmpty &&
         data[0] == poisonFirstByte) {
@@ -1424,6 +1608,42 @@ class _ReusingChunkTransformer implements ChunkTransformer {
       _buf = Uint8List(data.length);
     }
     _buf.setRange(0, data.length, data);
+    return Uint8List.sublistView(_buf, 0, data.length);
+  }
+
+  @override
+  void dispose() {}
+}
+
+/// A [ChunkTransformer] test double that makes buffer reuse *detectable*.
+///
+/// Like [_ReusingChunkTransformer] it returns a view over one buffer it
+/// overwrites on every call, but it fills that buffer with a per-call marker
+/// byte rather than echoing the input, and records a copy of what it claims
+/// to have returned in [expected].
+///
+/// That makes the check independent of how the kernel happened to split the
+/// stream into chunks: whatever boundaries [transform] saw, the bytes on the
+/// wire must equal [expected]. If anything retains a returned view past the
+/// next call, the retained bytes carry the *later* call's marker and the
+/// comparison fails at that offset.
+class _MarkingChunkTransformer implements ChunkTransformer {
+  Uint8List _buf = Uint8List(0);
+  int _calls = 0;
+
+  int get calls => _calls;
+
+  /// The exact byte sequence [transform] returned, copied as it was returned.
+  final BytesBuilder expected = BytesBuilder(copy: false);
+
+  @override
+  List<int> transform(List<int> data) {
+    final int marker = _calls++ & 0xff;
+    if (_buf.length < data.length) {
+      _buf = Uint8List(data.length);
+    }
+    _buf.fillRange(0, data.length, marker);
+    expected.add(Uint8List(data.length)..fillRange(0, data.length, marker));
     return Uint8List.sublistView(_buf, 0, data.length);
   }
 

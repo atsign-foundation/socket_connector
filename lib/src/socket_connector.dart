@@ -55,6 +55,8 @@ class SocketConnector {
   /// Emits each new [Connection] as it is established.
   Stream<Connection> get connectionStream => _csc.stream;
 
+  Timer? _timeoutTimer;
+
   SocketConnector({
     this.verbose = false,
     this.logTraffic = false,
@@ -64,7 +66,7 @@ class SocketConnector {
     IOSink? logger,
   }) {
     this.logger = logger ?? stderr;
-    Timer(timeout, () {
+    _timeoutTimer = Timer(timeout, () {
       _gracePeriodPassed = true;
       if (connections.isEmpty) {
         close();
@@ -183,6 +185,10 @@ class SocketConnector {
       return;
     }
 
+    if (thisSide.state == SideState.closed) {
+      return;
+    }
+
     if (thisSide.isSideA) {
       pendingA.add(thisSide);
     } else {
@@ -250,7 +256,7 @@ class SocketConnector {
               }
               side.farSide!.sent += data.length;
               if (side.state == SideState.closed &&
-                  side.rcvd == side.farSide!.sent) {
+                  side.produced == side.farSide!.sent) {
                 _closeSide(side.farSide!);
               }
             },
@@ -272,6 +278,9 @@ class SocketConnector {
             pause: () => sourceSub.pause(),
             resume: () => sourceSub.resume(),
             onError: onWriteError,
+            // A ChunkTransformer may hand back a view over memory it reuses,
+            // and the write below retains it past this callback.
+            copyBeforeWrite: side.chunkTransformer != null,
             write: (List<int> data) {
               side.farSide!.sink.add(data);
               if (side.isSideA) {
@@ -281,7 +290,7 @@ class SocketConnector {
               }
               side.farSide!.sent += data.length;
               if (side.state == SideState.closed &&
-                  side.rcvd == side.farSide!.sent) {
+                  side.produced == side.farSide!.sent) {
                 _closeSide(side.farSide!);
               }
             },
@@ -308,6 +317,7 @@ class SocketConnector {
               final List<int> outData = side.chunkTransformer != null
                   ? side.chunkTransformer!.transform(data)
                   : data;
+              side.produced += outData.length;
               directGate.add(outData);
             } catch (e, st) {
               onWriteError(e, st);
@@ -317,6 +327,10 @@ class SocketConnector {
             // controller's onPause wiring already carries backpressure back to
             // this subscription.
             try {
+              // The DataTransformer runs downstream of this add, so its
+              // output length is not known here; count the input, which is
+              // what the far side's `sent` matched before `produced` existed.
+              side.produced += data.length;
               side.farSide!.sink.add(data);
               if (side.isSideA) {
                 stats.bytesAtoB += data.length;
@@ -370,7 +384,8 @@ class SocketConnector {
       return;
     }
     side.state = SideState.closed;
-    side.chunkTransformer?.dispose();
+    pendingA.remove(side);
+    pendingB.remove(side);
 
     _log(chalk.brightBlue(
         '_closeSide ${side.name}: RCVD: ${side.rcvd} bytes; SENT: ${side.sent} bytes'));
@@ -409,7 +424,7 @@ class SocketConnector {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
       if (side.farSide != null && side.farSide!.state != SideState.closed) {
-        if (side.rcvd == side.farSide!.sent) {
+        if (side.produced == side.farSide!.sent) {
           _log(chalk.brightBlue(
               'Far side (${side.farSide?.name}) has received all data - will close it'));
           _closeSide(side.farSide!);
@@ -420,12 +435,20 @@ class SocketConnector {
       }
     } catch (err) {
       _log('_closeSide encountered error $err');
+    } finally {
+      // NOTE: disposed only once the socket is destroyed, never before the
+      // flush above. Nothing cancels this side's source subscription, so
+      // until destroy() it can still deliver a chunk — and transform() on a
+      // disposed transformer is a use-after-free for the FFI ciphers this
+      // API exists for. destroy() is what actually stops delivery.
+      side.chunkTransformer?.dispose();
     }
   }
 
   /// Closes both server sockets (if any), closes every pending and established
   /// side, completes [done] and closes [connectionStream]. Idempotent.
   void close() {
+    _timeoutTimer?.cancel();
     _serverSocketA?.close();
     _serverSocketA = null;
 
@@ -437,14 +460,18 @@ class SocketConnector {
       _csc.close();
       _log('closed');
     }
-    for (final s in pendingA) {
-      _closeSide(s);
-    }
+
+    final pA = pendingA.toList();
     pendingA.clear();
-    for (final s in pendingB) {
+    for (final s in pA) {
       _closeSide(s);
     }
+
+    final pB = pendingB.toList();
     pendingB.clear();
+    for (final s in pB) {
+      _closeSide(s);
+    }
   }
 
   void _log(String s, {bool force = false}) {
@@ -673,11 +700,18 @@ class SocketConnector {
     if (verbose) {
       logSink.writeln('socket_connector: Connecting to $addressB:$portB');
     }
-    Socket sideBSocket = await Socket.connect(addressB, portB);
-    Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
-    unawaited(connector.handleSingleConnection(sideB).catchError((err) {
-      logSink.writeln('ERROR $err from handleSingleConnection on sideB $sideB');
-    }));
+    try {
+      Socket sideBSocket = await Socket.connect(addressB, portB);
+      Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
+      unawaited(connector.handleSingleConnection(sideB).catchError((err) {
+        logSink
+            .writeln('ERROR $err from handleSingleConnection on sideB $sideB');
+      }));
+    } catch (e) {
+      sideA.socket.destroy();
+      connector._closeSide(sideA);
+      rethrow;
+    }
 
     if (verbose) {
       logSink.writeln('socket_connector: started');
@@ -767,21 +801,27 @@ class SocketConnector {
           logSink.writeln('Creating socket #${++connections} to the "B" side');
         }
         // connect to the side 'B' address and port
-        Socket sideBSocket = await Socket.connect(addressB, portB);
-        if (verbose) {
-          logSink.writeln('"B" side socket #$connections created');
-        }
-        Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
-        if (verbose) {
-          logSink.writeln('Calling the beforeJoining callback');
-        }
-        await beforeJoining?.call(sideA, sideB);
-        unawaited(connector.handleSingleConnection(sideB).catchError((err) {
-          logSink.writeln(
-              'ERROR $err from handleSingleConnection on sideB $sideB');
-        }));
+        try {
+          Socket sideBSocket = await Socket.connect(addressB, portB);
+          if (verbose) {
+            logSink.writeln('"B" side socket #$connections created');
+          }
+          Side sideB = Side(sideBSocket, false, transformer: transformBtoA);
+          if (verbose) {
+            logSink.writeln('Calling the beforeJoining callback');
+          }
+          await beforeJoining?.call(sideA, sideB);
+          unawaited(connector.handleSingleConnection(sideB).catchError((err) {
+            logSink.writeln(
+                'ERROR $err from handleSingleConnection on sideB $sideB');
+          }));
 
-        onConnect?.call(sideASocket, sideBSocket);
+          onConnect?.call(sideASocket, sideBSocket);
+        } catch (e) {
+          logSink.writeln('ERROR connecting to side B or in beforeJoining: $e');
+          sideA.socket.destroy();
+          connector._closeSide(sideA);
+        }
       } finally {
         m.release();
       }
@@ -843,11 +883,13 @@ class _FlushGate {
     required void Function() pause,
     required void Function() resume,
     required void Function(Object error, StackTrace stackTrace) onError,
+    bool copyBeforeWrite = false,
   })  : _socket = socket,
         _write = write,
         _pause = pause,
         _resume = resume,
-        _onError = onError;
+        _onError = onError,
+        _copyBeforeWrite = copyBeforeWrite;
 
   final Socket _socket;
   final void Function(List<int> data) _write;
@@ -855,7 +897,12 @@ class _FlushGate {
   final void Function() _resume;
   final void Function(Object error, StackTrace stackTrace) _onError;
 
+  /// Whether [add] must copy before writing, set when the data it gates comes
+  /// from a [ChunkTransformer]. See [add].
+  final bool _copyBeforeWrite;
+
   int _unflushed = 0;
+  int _stashedBytes = 0;
   bool _flushing = false;
   bool _paused = false;
   List<List<int>> _stash = <List<int>>[];
@@ -863,25 +910,39 @@ class _FlushGate {
   /// Writes [data], or stashes it if a flush is in flight or the socket is
   /// bound by someone else's flush.
   ///
-  /// A stash always copies: [ChunkTransformer.transform] is allowed to
-  /// return a view over memory it reuses on its next call, on the promise
-  /// that [SocketConnector] reads it synchronously and never retains it
-  /// (see that contract's doc comment). A stash breaks "reads it
-  /// synchronously" by construction, so it takes its own copy up front
-  /// rather than pass that promise on to every [ChunkTransformer].
+  /// Both paths copy when [_copyBeforeWrite] is set, because
+  /// [ChunkTransformer.transform] is allowed to return a view over memory it
+  /// reuses on its next call (see that contract's doc comment) and neither
+  /// path consumes its argument before that next call can happen:
+  ///
+  /// - a stash holds the list across the flush it is waiting on;
+  /// - `Socket.add` holds it until the bytes reach the kernel, which spans
+  ///   event-loop turns whenever the socket takes a partial write. That is
+  ///   the ordinary condition for a congested relay, and it is not bounded by
+  ///   [SocketConnector.bufferHighWaterMark] — the mark only triggers a flush
+  ///   once enough bytes have been *written*, long after the first partial
+  ///   write has already retained a view.
+  ///
+  /// The two branches are mutually exclusive, so no chunk is copied twice.
   void add(List<int> data) {
     if (_flushing) {
       _stash.add(List<int>.of(data));
+      _stashedBytes += data.length;
+      if (_stashedBytes >= SocketConnector.bufferHighWaterMark * 2) {
+        _onError(StateError('Stash exceeded maximum limit (OOM protection)'),
+            StackTrace.current);
+      }
       return;
     }
     try {
-      _write(data);
+      _write(_copyBeforeWrite ? Uint8List.fromList(data) : data);
     } catch (e, st) {
       if (_isSinkBound(e)) {
         // Some other flush (e.g. the close path) holds the socket bound.
         // That is transient - stash and replay once it clears, rather than
         // closing the side on a flush that is merely still in flight.
         _stash.add(List<int>.of(data));
+        _stashedBytes += data.length;
         _beginFlush();
         return;
       }
@@ -935,6 +996,7 @@ class _FlushGate {
     if (_stash.isNotEmpty) {
       final List<List<int>> pending = _stash;
       _stash = <List<int>>[];
+      _stashedBytes = 0;
       for (final List<int> data in pending) {
         // A replayed chunk may cross the mark again, or hit the bound state
         // again; either way add() re-stashes the remainder into the fresh
