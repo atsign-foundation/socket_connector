@@ -1,3 +1,13 @@
+## 2.6.0
+
+- feat: `ChunkTransformer`, a synchronous per-chunk alternative to
+  `DataTransformer` for transforms that need no buffering. It runs without a
+  stream-level mutex, and may return a view over memory it reuses — the
+  connector copies before handing that view to the socket.
+- fix: a side-B connect failure, or a throwing `beforeJoining`/`onConnect`, no
+  longer leaks the connected socket or leaves the relay unable to accept
+  further connections.
+
 ## 2.5.1
 
 - fix: the backpressure flush (added in 2.5.0) could race a socket write and
