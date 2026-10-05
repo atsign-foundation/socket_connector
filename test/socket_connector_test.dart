@@ -38,6 +38,36 @@ void main() {
       await connector.done.timeout(Duration.zero);
     });
 
+    test('close() closes an established connection on both sides', () async {
+      SocketConnector connector = await SocketConnector.serverToServer(
+        addressA: InternetAddress.loopbackIPv4,
+        addressB: InternetAddress.loopbackIPv4,
+        verbose: false,
+      );
+      final established = connector.connectionStream.first;
+      Socket socketA = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        connector.sideAPort!,
+      );
+      Socket socketB = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        connector.sideBPort!,
+      );
+      addTearDown(socketA.destroy);
+      addTearDown(socketB.destroy);
+      await established;
+      final aClosed = socketA.drain<void>();
+      final bClosed = socketB.drain<void>();
+
+      connector.close();
+
+      await Future.wait([aClosed, bClosed]).timeout(
+        Duration(seconds: 2),
+        onTimeout: () => fail('an established side is still open after close()'),
+      );
+      expect(connector.connections, isEmpty);
+    });
+
     test('Test timeout has passed', () async {
       SocketConnector connector = await SocketConnector.serverToServer(
         portA: 0,
