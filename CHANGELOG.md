@@ -1,3 +1,8 @@
+## 2.6.1
+
+- fix: `close()` now closes established connections too, as documented;
+  they used to stay open.
+
 ## 2.6.0
 
 - feat: `ChunkTransformer`, a synchronous per-chunk alternative to

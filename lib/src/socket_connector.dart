@@ -472,6 +472,11 @@ class SocketConnector {
     for (final s in pB) {
       _closeSide(s);
     }
+
+    for (final c in connections.toList()) {
+      _closeSide(c.sideA);
+      _closeSide(c.sideB);
+    }
   }
 
   void _log(String s, {bool force = false}) {
