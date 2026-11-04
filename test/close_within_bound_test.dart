@@ -256,6 +256,9 @@ void main() {
       await _waitFor(() => relay.connection.sideB.sent == queued,
           'side B to be handed all $queued bytes');
 
+      int? endsWhenDone;
+      unawaited(
+          relay.connector.done.then((_) => endsWhenDone = relay.ends.length));
       final sinceClose = Stopwatch()..start();
       relay.connector.close();
 
@@ -266,6 +269,14 @@ void main() {
           reason: 'every side is destroyed no later than closeFlushTimeout'
               ' after close() began');
       await relay.connector.done.timeout(testCloseFlushTimeout + slack);
+      expect(endsWhenDone, 0,
+          reason: 'the connection is still open when done completes');
+      expect(await relay.allEnds(), hasLength(1),
+          reason: 'connectionClosedStream emits a Connection whose sides are'
+              ' destroyed after done completes');
+      expect(relay.endsClosed, isTrue,
+          reason: 'connectionClosedStream closes once that Connection has been'
+              ' emitted');
     });
 
     test('when the relay\'s own flush holds its socket', () async {
