@@ -54,7 +54,9 @@ Other capabilities:
   [`example/wait_for_connector_done_example.dart`](example/wait_for_connector_done_example.dart).
 - **Bounded close** — no side waits longer than `closeFlushTimeout` (default
   30 seconds) for its pending data to be flushed before it is destroyed, even
-  when its peer has stopped reading.
+  when its peer has stopped reading, and a relay flush toward a side that has
+  not completed within `stalledFlushTimeout` (default 2 minutes) closes its
+  connection.
 
 ## Getting started
 

@@ -2,11 +2,13 @@
 
 - feat: `connectionClosedStream` emits each `Connection` once both of its
   sides have been destroyed; `Side.closedAt` records when each side was.
+- feat: a connection whose relay flush toward one side has not completed
+  within `stalledFlushTimeout` (default 2 minutes) is closed.
 - fix: a closing side is destroyed within `closeFlushTimeout` (default 30
   seconds), even when its peer stops reading or resets, including every side
   that `close()` closes.
-- fix: a side still authenticating when `close()` runs is closed once its
-  authentication ends, instead of being paired into a new connection.
+- fix: `close()` also destroys a side that is still authenticating, and a side
+  B that `serverToSocket` connects while `close()` runs.
 
 ## 2.6.1
 
