@@ -1,3 +1,11 @@
+## 2.7.0
+
+- feat: `connectionClosedStream` emits each `Connection` once both of its
+  sides have been destroyed; `Side.closedAt` records when each side was.
+- fix: a closing side is destroyed within `closeFlushTimeout` (default 30
+  seconds), even when its peer stops reading or resets, including every side
+  that `close()` closes.
+
 ## 2.6.1
 
 - fix: `close()` now closes established connections too, as documented;
