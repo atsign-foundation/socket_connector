@@ -184,7 +184,8 @@ class SocketConnector {
   ///   [connectionStream]. Data from each side is rewritten by that side's
   ///   `transformer` (if any) before being written to the far side.
   ///
-  /// Throws [StateError] if the connector is already [closed].
+  /// Throws [StateError] if the connector is already [closed]. A side whose
+  /// authentication ends after the connector closes is closed, not paired.
   Future<void> handleSingleConnection(final Side thisSide) async {
     if (closed) {
       throw StateError('Connector is closed');
@@ -222,6 +223,10 @@ class SocketConnector {
     }
 
     if (thisSide.state == SideState.closed) {
+      return;
+    }
+    if (closed) {
+      _closeSide(thisSide);
       return;
     }
 
@@ -406,7 +411,7 @@ class SocketConnector {
     while (true) {
       final Duration remaining = deadline - _clock.elapsed;
       if (remaining <= Duration.zero) {
-        throw TimeoutException('flush did not finish', closeFlushTimeout);
+        throw TimeoutException('close deadline reached before the flush');
       }
       try {
         await socket.flush().timeout(remaining);
@@ -576,7 +581,7 @@ class SocketConnector {
       _closeSide(s);
     }
 
-    for (final c in connections.toList()) {
+    for (final c in [...connections, ..._endingConnections]) {
       _closeSide(c.sideA);
       _closeSide(c.sideB);
     }

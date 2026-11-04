@@ -5,6 +5,8 @@
 - fix: a closing side is destroyed within `closeFlushTimeout` (default 30
   seconds), even when its peer stops reading or resets, including every side
   that `close()` closes.
+- fix: a side still authenticating when `close()` runs is closed once its
+  authentication ends, instead of being paired into a new connection.
 
 ## 2.6.1
 

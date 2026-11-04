@@ -291,6 +291,75 @@ void main() {
               ' after close() began');
       await relay.connector.done.timeout(testCloseFlushTimeout + slack);
     });
+
+    test('when the other side\'s close has already begun', () async {
+      const int queued = 2 * 1024 * 1024;
+      final relay = await _Relay.start();
+      _setBufferSizes(relay.peerA.socket, relay.connection.sideA.socket);
+      _setBufferSizes(relay.peerB.socket, relay.connection.sideB.socket);
+      relay.peerA.stopReading();
+      relay.peerB.stopReading();
+      relay.peerA.send(queued);
+      relay.peerB.send(queued);
+      await _waitFor(
+          () =>
+              relay.connection.sideA.sent == queued &&
+              relay.connection.sideB.sent == queued,
+          'each side to be handed $queued bytes');
+
+      unawaited(relay.peerA.socket.close());
+      await _waitFor(() => relay.connection.sideA.state == SideState.closed,
+          'side A\'s close to begin');
+      expect(relay.connection.sideA.closedAt, isNull,
+          reason: 'side A is still flushing when close() is called');
+
+      final sinceClose = Stopwatch()..start();
+      relay.connector.close();
+
+      await _expectDestroyedWithin(
+          [relay.connection.sideA, relay.connection.sideB],
+          sinceClose,
+          testCloseFlushTimeout + slack,
+          reason: 'every side is destroyed no later than closeFlushTimeout'
+              ' after close() began');
+    });
+  });
+
+  test('a side whose authentication ends after close() is closed, not paired',
+      () async {
+    final started = [Completer<void>(), Completer<void>()];
+    final authenticated = Completer<void>();
+    SocketAuthVerifier verifierFor(int i) => (Socket socket) async {
+          started[i].complete();
+          await authenticated.future;
+          return (true, socket);
+        };
+    final connector = await SocketConnector.serverToServer(
+      addressA: InternetAddress.loopbackIPv4,
+      addressB: InternetAddress.loopbackIPv4,
+      socketAuthVerifierA: verifierFor(0),
+      socketAuthVerifierB: verifierFor(1),
+      closeFlushTimeout: testCloseFlushTimeout,
+    );
+    addTearDown(connector.close);
+    final peerA = await _Peer.connect(connector.sideAPort!);
+    final peerB = await _Peer.connect(connector.sideBPort!);
+    await Future.wait([for (final s in started) s.future])
+        .timeout(Duration(seconds: 5));
+
+    connector.close();
+    // Lets every callback that close() triggers run before authentication
+    // ends.
+    await Future<void>.delayed(Duration(milliseconds: 200));
+    authenticated.complete();
+    await Future<void>.delayed(Duration(milliseconds: 200));
+
+    expect(connector.connections, isEmpty,
+        reason: 'no Connection is formed once the connector is closed');
+    await Future.wait([peerA.ended.future, peerB.ended.future])
+        .timeout(testCloseFlushTimeout + slack, onTimeout: () {
+      fail('both sides are destroyed once their authentication ends');
+    });
   });
 
   group('A reset while the relay\'s read is paused still closes both sides',
