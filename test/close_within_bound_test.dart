@@ -12,6 +12,9 @@ const Duration testCloseFlushTimeout = Duration(seconds: 1);
 /// Allowance on top of [testCloseFlushTimeout] for timers and socket events.
 const Duration slack = Duration(milliseconds: 500);
 
+/// The bound these tests give a relay flush in the stalled-flush scenarios.
+const Duration testStalledFlushTimeout = Duration(seconds: 1);
+
 /// Catalogue: features/close_within_bound.feature
 void main() {
   late int savedHighWaterMark;
@@ -76,9 +79,20 @@ void main() {
       'every factory passes closeFlushTimeout to its connector, '
       'which defaults to 30 seconds', () async {
     expect(SocketConnector.defaultCloseFlushTimeout, Duration(seconds: 30));
+    expect(() => SocketConnector(closeFlushTimeout: Duration(milliseconds: -1)),
+        throwsArgumentError,
+        reason: 'a negative closeFlushTimeout is refused');
+    expect(SocketConnector.defaultStalledFlushTimeout, Duration(minutes: 2));
+    for (final refused in [Duration.zero, Duration(milliseconds: -1)]) {
+      expect(() => SocketConnector(stalledFlushTimeout: refused),
+          throwsArgumentError,
+          reason: 'a stalledFlushTimeout of $refused is refused');
+    }
     final bare = SocketConnector();
     addTearDown(bare.close);
     expect(bare.closeFlushTimeout, SocketConnector.defaultCloseFlushTimeout);
+    expect(
+        bare.stalledFlushTimeout, SocketConnector.defaultStalledFlushTimeout);
 
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(server.close);
@@ -92,6 +106,8 @@ void main() {
     Future<SocketConnector> build(Duration? bound, String factory) async {
       final Duration closeFlushTimeout =
           bound ?? SocketConnector.defaultCloseFlushTimeout;
+      final Duration stalledFlushTimeout =
+          bound ?? SocketConnector.defaultStalledFlushTimeout;
       final SocketConnector connector = switch (factory) {
         'serverToServer' => bound == null
             ? await SocketConnector.serverToServer(
@@ -99,7 +115,8 @@ void main() {
             : await SocketConnector.serverToServer(
                 addressA: loopback,
                 addressB: loopback,
-                closeFlushTimeout: closeFlushTimeout),
+                closeFlushTimeout: closeFlushTimeout,
+                stalledFlushTimeout: stalledFlushTimeout),
         'serverToSocket' => bound == null
             ? await SocketConnector.serverToSocket(
                 addressA: loopback, addressB: loopback, portB: server.port)
@@ -107,7 +124,8 @@ void main() {
                 addressA: loopback,
                 addressB: loopback,
                 portB: server.port,
-                closeFlushTimeout: closeFlushTimeout),
+                closeFlushTimeout: closeFlushTimeout,
+                stalledFlushTimeout: stalledFlushTimeout),
         'socketToServer' => bound == null
             ? await SocketConnector.socketToServer(
                 addressA: loopback, portA: server.port, addressB: loopback)
@@ -115,7 +133,8 @@ void main() {
                 addressA: loopback,
                 portA: server.port,
                 addressB: loopback,
-                closeFlushTimeout: closeFlushTimeout),
+                closeFlushTimeout: closeFlushTimeout,
+                stalledFlushTimeout: stalledFlushTimeout),
         _ => bound == null
             ? await SocketConnector.socketToSocket(
                 addressA: loopback,
@@ -127,7 +146,8 @@ void main() {
                 portA: server.port,
                 addressB: loopback,
                 portB: server.port,
-                closeFlushTimeout: closeFlushTimeout),
+                closeFlushTimeout: closeFlushTimeout,
+                stalledFlushTimeout: stalledFlushTimeout),
       };
       addTearDown(connector.close);
       return connector;
@@ -139,11 +159,18 @@ void main() {
       'socketToServer',
       'socketToSocket'
     ]) {
-      expect((await build(null, factory)).closeFlushTimeout,
-          SocketConnector.defaultCloseFlushTimeout,
+      final SocketConnector defaulted = await build(null, factory);
+      expect(
+          defaulted.closeFlushTimeout, SocketConnector.defaultCloseFlushTimeout,
           reason: '$factory defaults closeFlushTimeout to 30 seconds');
-      expect((await build(chosen, factory)).closeFlushTimeout, chosen,
+      expect(defaulted.stalledFlushTimeout,
+          SocketConnector.defaultStalledFlushTimeout,
+          reason: '$factory defaults stalledFlushTimeout to 2 minutes');
+      final SocketConnector given = await build(chosen, factory);
+      expect(given.closeFlushTimeout, chosen,
           reason: '$factory passes closeFlushTimeout to its connector');
+      expect(given.stalledFlushTimeout, chosen,
+          reason: '$factory passes stalledFlushTimeout to its connector');
     }
   });
 
@@ -207,8 +234,12 @@ void main() {
           'side A\'s close to begin');
       expect(relay.connection.sideA.closedAt, isNull,
           reason: 'side A is still flushing when close() is called');
+      final sinceClose = Stopwatch()..start();
       relay.connector.close();
 
+      await _expectDestroyedWithin([relay.connection.sideB], sinceClose, slack,
+          reason: 'close() closes side B at once, while side A is still'
+              ' flushing');
       await _waitFor(() => relay.ends.isNotEmpty, 'the connection\'s end',
           within: testCloseFlushTimeout + slack);
       expect(relay.ends.single.sidesDestroyed, isTrue,
@@ -271,12 +302,12 @@ void main() {
       await relay.connector.done.timeout(testCloseFlushTimeout + slack);
       expect(endsWhenDone, 0,
           reason: 'the connection is still open when done completes');
-      expect(await relay.allEnds(), hasLength(1),
+      expect(await relay.endsClosedWithin(slack), isTrue,
+          reason: 'connectionClosedStream closes once that Connection has been'
+              ' emitted, with no further close()');
+      expect(relay.ends, hasLength(1),
           reason: 'connectionClosedStream emits a Connection whose sides are'
               ' destroyed after done completes');
-      expect(relay.endsClosed, isTrue,
-          reason: 'connectionClosedStream closes once that Connection has been'
-              ' emitted');
     });
 
     test('when the relay\'s own flush holds its socket', () async {
@@ -301,6 +332,37 @@ void main() {
           reason: 'every side is destroyed no later than closeFlushTimeout'
               ' after close() began');
       await relay.connector.done.timeout(testCloseFlushTimeout + slack);
+    });
+
+    test(
+        'when the relay\'s own flush holds its socket, without leaving that'
+        ' flush\'s stall timer running', () async {
+      SocketConnector.bufferHighWaterMark = 64 * 1024;
+      const Duration stall = Duration(seconds: 7);
+      final timers = <Timer>[];
+      int? activeAtEnd;
+      await runZoned(() async {
+        final relay = await _Relay.start(stalledFlushTimeout: stall);
+        relay.connector.connectionClosedStream.listen(
+            (_) => activeAtEnd = timers.where((t) => t.isActive).length);
+        relay.peerB.stopReading();
+        relay.peerA.send(32 * 1024 * 1024);
+        await _waitForSteady(() => relay.connection.sideA.rcvd,
+            'the relay to stop reading side A while side B flushes');
+        relay.connector.close();
+        await _waitFor(() => activeAtEnd != null, 'the connection\'s end',
+            within: testCloseFlushTimeout + slack);
+      }, zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+        final Timer timer = parent.createTimer(zone, duration, callback);
+        if (duration == stall) {
+          timers.add(timer);
+        }
+        return timer;
+      }));
+      expect(timers, isNotEmpty,
+          reason: 'the relay\'s flush of side B started a stall timer');
+      expect(activeAtEnd, 0, reason: 'no stall timer outlives the connection');
     });
 
     test('when the other side\'s close has already begun', () async {
@@ -334,6 +396,54 @@ void main() {
           reason: 'every side is destroyed no later than closeFlushTimeout'
               ' after close() began');
     });
+  });
+
+  group('close() frees a side whose flush cannot finish', () {
+    test('when it is still authenticating', () async {
+      final sockets = <Socket>[];
+      final started = Completer<void>();
+      final connector = await SocketConnector.serverToServer(
+        addressA: InternetAddress.loopbackIPv4,
+        addressB: InternetAddress.loopbackIPv4,
+        authTimeout: Duration(seconds: 4),
+        closeFlushTimeout: testCloseFlushTimeout,
+        socketAuthVerifierA: (socket) {
+          sockets.add(socket);
+          started.complete();
+          return Completer<(bool, Stream<Uint8List>?)>().future;
+        },
+      );
+      addTearDown(connector.close);
+      final peerA = await _Peer.connect(connector.sideAPort!);
+      await started.future.timeout(Duration(seconds: 5));
+
+      final sinceClose = Stopwatch()..start();
+      connector.close();
+      while (!_isDestroyed(sockets.single) &&
+          sinceClose.elapsed < testCloseFlushTimeout + slack) {
+        await Future<void>.delayed(Duration(milliseconds: 5));
+      }
+      expect(_isDestroyed(sockets.single), isTrue,
+          reason: 'every side is destroyed no later than closeFlushTimeout'
+              ' after close() began (after ${sinceClose.elapsedMilliseconds}'
+              ' ms: the authenticating side is not destroyed)');
+      await peerA.ended.future.timeout(slack);
+    });
+
+    test(
+        'when another write holds its socket, after five seconds even under a'
+        ' longer closeFlushTimeout', () async {
+      final relay = await _Relay.start(closeFlushTimeout: Duration(seconds: 8));
+      addTearDown(_bindSink(relay.connection.sideB.socket).close);
+
+      final sinceClose = Stopwatch()..start();
+      relay.connector.close();
+
+      await _expectDestroyedWithin(
+          [relay.connection.sideB], sinceClose, Duration(milliseconds: 6500),
+          reason: 'a side whose socket another write holds is destroyed five'
+              ' seconds into its close');
+    }, timeout: Timeout(Duration(seconds: 30)));
   });
 
   test('a side whose authentication ends after close() is closed, not paired',
@@ -373,15 +483,149 @@ void main() {
     });
   });
 
+  test('a side B that connects while close() runs is destroyed', () async {
+    final destination =
+        await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(destination.close);
+    final peerB = Completer<_Peer>();
+    destination.listen((s) => peerB.complete(_Peer(s)));
+    final joining = Completer<void>();
+    final release = Completer<void>();
+    final connector = await SocketConnector.serverToSocket(
+      addressA: InternetAddress.loopbackIPv4,
+      addressB: InternetAddress.loopbackIPv4,
+      portB: destination.port,
+      closeFlushTimeout: testCloseFlushTimeout,
+      beforeJoining: (sideA, sideB) async {
+        joining.complete();
+        await release.future;
+      },
+    );
+    addTearDown(connector.close);
+    await _Peer.connect(connector.sideAPort!);
+    await joining.future.timeout(Duration(seconds: 5));
+    final peer = await peerB.future.timeout(Duration(seconds: 5));
+
+    connector.close();
+    release.complete();
+
+    await peer.ended.future.timeout(testCloseFlushTimeout + slack,
+        onTimeout: () => fail('side B\'s socket is destroyed once the'
+            ' connector has closed'));
+  });
+
+  test('A relay flush that never completes closes its connection', () async {
+    const int written = 32 * 1024 * 1024;
+    final relay =
+        await _Relay.start(stalledFlushTimeout: testStalledFlushTimeout);
+    relay.peerB.stopReading();
+
+    relay.peerA.send(written);
+    await _waitForSteady(() => relay.connection.sideA.rcvd,
+        'the relay to stop reading side A while side B flushes');
+    expect(relay.connection.sideB.sent,
+        greaterThanOrEqualTo(SocketConnector.bufferHighWaterMark),
+        reason: 'more than bufferHighWaterMark is queued toward side B');
+    expect(relay.connection.sideA.rcvd, lessThan(written),
+        reason: 'the relay\'s flush toward side B has not completed');
+
+    final sinceStall = Stopwatch()..start();
+    await _expectDestroyedWithin(
+        [relay.connection.sideA, relay.connection.sideB],
+        sinceStall,
+        testStalledFlushTimeout + testCloseFlushTimeout + slack,
+        reason: 'both sides of the Connection are destroyed no later than'
+            ' closeFlushTimeout after the flush passes stalledFlushTimeout');
+    expect(await relay.allEnds(), hasLength(1),
+        reason: 'connectionClosedStream emits the Connection once');
+  });
+
+  test('A reader that keeps draining is not cut off', () async {
+    final relay =
+        await _Relay.start(stalledFlushTimeout: testStalledFlushTimeout);
+    relay.peerB.readInBursts();
+
+    final carrying = Stopwatch()..start();
+    while (carrying.elapsed < testStalledFlushTimeout * 3) {
+      relay.peerA.send(64 * 1024);
+      await Future<void>.delayed(Duration(milliseconds: 5));
+    }
+
+    expect(relay.connection.sideB.sent,
+        greaterThan(2 * SocketConnector.bufferHighWaterMark),
+        reason: 'relay flushes toward side B have completed while the'
+            ' Connection carried data');
+    expect((
+      relay.connection.sideA.state,
+      relay.connection.sideB.state
+    ), (
+      SideState.open,
+      SideState.open
+    ), reason: 'the Connection stays open');
+  }, timeout: Timeout(Duration(seconds: 60)));
+
+  test('A stalled flush closes only its own Connection', () async {
+    const int written = 32 * 1024 * 1024;
+    final connector = await SocketConnector.serverToServer(
+      addressA: InternetAddress.loopbackIPv4,
+      addressB: InternetAddress.loopbackIPv4,
+      closeFlushTimeout: testCloseFlushTimeout,
+      stalledFlushTimeout: testStalledFlushTimeout,
+    );
+    addTearDown(connector.close);
+    final established = <Connection>[];
+    connector.connectionStream.listen(established.add);
+    final peers = <_Peer>[];
+    for (int i = 0; i < 2; i++) {
+      peers.add(await _Peer.connect(connector.sideAPort!));
+      peers.add(await _Peer.connect(connector.sideBPort!));
+      await _waitFor(() => established.length == i + 1, 'connection $i');
+    }
+    final [a1, b1, a2, b2] = peers;
+    final [first, second] = established;
+    expect((
+      first.sideA.remotePort,
+      second.sideA.remotePort
+    ), (
+      a1.socket.port,
+      a2.socket.port
+    ), reason: 'each Connection pairs the peers that connected together');
+
+    b1.stopReading();
+    a1.send(written);
+    await _waitForSteady(() => first.sideA.rcvd,
+        'the relay to stop reading the first side A while its side B flushes');
+    expect(first.sideA.rcvd, lessThan(written),
+        reason: 'the first Connection\'s flush toward side B has not'
+            ' completed');
+
+    final sinceStall = Stopwatch()..start();
+    await _expectDestroyedWithin([first.sideA, first.sideB], sinceStall,
+        testStalledFlushTimeout + testCloseFlushTimeout + slack,
+        reason: 'the first Connection is destroyed');
+    expect(
+        [second.sideA, second.sideB]
+            .map((s) => (s.state, _isDestroyed(s.socket))),
+        everyElement((SideState.open, false)),
+        reason: 'the second Connection stays open');
+    a2.send(1000);
+    b2.send(1000);
+    await _waitFor(() => a2.received == 1000 && b2.received == 1000,
+        'the second Connection to carry data both ways');
+  });
+
   group('A reset while the relay\'s read is paused still closes both sides',
       () {
     /// Pauses the relay's read of side A behind its flush of side B, hands
     /// side A [towardsA] bytes that peer A is not reading, resets peer A, and
     /// expects both sides destroyed within the bound.
     Future<void> expectBothClosedAfterReset(int towardsA,
-        {bool holdSideB = false}) async {
+        {bool holdSideB = false,
+        Duration stall = SocketConnector.defaultStalledFlushTimeout,
+        void Function(SocketConnector connector)? watch}) async {
       final int written = holdSideB ? 64 * 1024 : 32 * 1024 * 1024;
-      final relay = await _Relay.start();
+      final relay = await _Relay.start(stalledFlushTimeout: stall);
+      watch?.call(relay.connector);
       _setBufferSizes(relay.peerA.socket, relay.connection.sideA.socket);
       relay.peerA.stopReading();
       relay.peerB.stopReading();
@@ -429,6 +673,31 @@ void main() {
     test('when the relay\'s flush of side A is in flight', () async {
       SocketConnector.bufferHighWaterMark = 64 * 1024;
       await expectBothClosedAfterReset(2 * 1024 * 1024);
+    });
+
+    test(
+        'when the relay\'s flush of side A is in flight, without leaving that'
+        ' flush\'s stall timer running', () async {
+      SocketConnector.bufferHighWaterMark = 64 * 1024;
+      const Duration stall = Duration(seconds: 7);
+      final timers = <Timer>[];
+      int? activeAtEnd;
+      await runZoned(
+          () => expectBothClosedAfterReset(2 * 1024 * 1024,
+              stall: stall,
+              watch: (connector) => connector.connectionClosedStream.listen(
+                  (_) => activeAtEnd = timers.where((t) => t.isActive).length)),
+          zoneSpecification: ZoneSpecification(
+              createTimer: (self, parent, zone, duration, callback) {
+        final Timer timer = parent.createTimer(zone, duration, callback);
+        if (duration == stall) {
+          timers.add(timer);
+        }
+        return timer;
+      }));
+      expect(timers, isNotEmpty,
+          reason: 'the relay\'s flush of side A started a stall timer');
+      expect(activeAtEnd, 0, reason: 'no stall timer outlives the connection');
     });
 
     test('when the relay still holds data for side B', () async {
@@ -546,33 +815,120 @@ void main() {
     expect(late, isEmpty, reason: 'no close events are retained');
   }, timeout: Timeout(Duration(seconds: 90)));
 
-  test('A peer that is reading receives the tail before its side is destroyed',
-      () async {
-    // Raised so the relay reads all of peer A's data, and side B's close
-    // begins with all of it still queued in the relay.
-    SocketConnector.bufferHighWaterMark = 64 * 1024 * 1024;
-    const int queued = 32 * 1024 * 1024;
-    final relay = await _Relay.start(closeFlushTimeout: Duration(seconds: 10));
-    relay.peerB.stopReading();
+  group('A peer that is reading receives the tail before its side is destroyed',
+      () {
+    test('when the relay still holds the tail as side B\'s close begins',
+        () async {
+      // Raised so the relay reads all of peer A's data, and side B's close
+      // begins with all of it still queued in the relay.
+      SocketConnector.bufferHighWaterMark = 64 * 1024 * 1024;
+      const int queued = 32 * 1024 * 1024;
+      final relay =
+          await _Relay.start(closeFlushTimeout: Duration(seconds: 10));
+      relay.peerB.stopReading();
 
-    relay.peerA.send(queued);
-    unawaited(relay.peerA.socket.close());
-    await _waitFor(() => relay.connection.sideA.closedAt != null,
-        'side A to be destroyed');
-    expect(relay.connection.sideB.state, SideState.closed,
-        reason: 'side B\'s close has begun with data queued for peer B');
-    expect(relay.peerB.received, lessThan(queued),
-        reason: 'data is queued for peer B when side B\'s close begins');
+      relay.peerA.send(queued);
+      unawaited(relay.peerA.socket.close());
+      await _waitFor(() => relay.connection.sideA.closedAt != null,
+          'side A to be destroyed');
+      expect(relay.connection.sideB.state, SideState.closed,
+          reason: 'side B\'s close has begun with data queued for peer B');
+      expect(relay.peerB.received, lessThan(queued),
+          reason: 'data is queued for peer B when side B\'s close begins');
 
-    relay.peerB.resumeReading();
-    await relay.peerB.ended.future.timeout(Duration(seconds: 30),
-        onTimeout: () => fail('the relay never closed side B'));
-    expect(relay.peerB.received, queued,
-        reason: 'peer B receives all $queued bytes before side B is'
-            ' destroyed');
-    expect(_isDestroyed(relay.connection.sideB.socket), isTrue,
-        reason: 'side B is destroyed once its tail is delivered');
-  }, timeout: Timeout(Duration(seconds: 60)));
+      relay.peerB.resumeReading();
+      await relay.peerB.ended.future.timeout(Duration(seconds: 30),
+          onTimeout: () => fail('the relay never closed side B'));
+      expect(relay.peerB.received, queued,
+          reason: 'peer B receives all $queued bytes before side B is'
+              ' destroyed');
+      expect(_isDestroyed(relay.connection.sideB.socket), isTrue,
+          reason: 'side B is destroyed once its tail is delivered');
+    }, timeout: Timeout(Duration(seconds: 60)));
+
+    test(
+        'when a transformer still holds the tail as the connector closes'
+        ' itself', () async {
+      final (peerB, _) = await _transformerTail(sent: 1024 * 1024);
+      expect(peerB.received, 1024 * 1024,
+          reason: 'peer B receives all 1048576 bytes before side B is'
+              ' destroyed');
+    }, timeout: Timeout(Duration(seconds: 60)));
+
+    test(
+        'when a transformer still holds the tail, side B\'s deadline timer is'
+        ' cancelled once side B closes', () async {
+      final timers = <Timer>[];
+      await runZoned(
+          () => _transformerTail(
+              sent: 1024 * 1024, closeFlushTimeout: Duration(seconds: 7)),
+          zoneSpecification: ZoneSpecification(
+              createTimer: (self, parent, zone, duration, callback) {
+        final Timer timer = parent.createTimer(zone, duration, callback);
+        if (duration > Duration(seconds: 6) &&
+            duration <= Duration(seconds: 7)) {
+          timers.add(timer);
+        }
+        return timer;
+      }));
+      expect(timers, isNotEmpty,
+          reason: 'the close of side A and side B set up their deadlines');
+      expect(timers.where((t) => t.isActive), isEmpty,
+          reason: 'no deadline timer outlives the connection');
+    }, timeout: Timeout(Duration(seconds: 60)));
+  });
+}
+
+/// Relays [sent] bytes from peer A through [_slowTransform], on a [SocketConnector.serverToSocket] whose grace period has
+/// passed, then closes peer A and returns peer B once its stream has ended.
+Future<(_Peer, SocketConnector)> _transformerTail(
+    {required int sent,
+    Duration closeFlushTimeout =
+        SocketConnector.defaultCloseFlushTimeout}) async {
+  final destination = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+  addTearDown(destination.close);
+  final peerB = Completer<_Peer>();
+  destination.listen((s) => peerB.complete(_Peer(s)));
+  final connector = await SocketConnector.serverToSocket(
+    addressA: InternetAddress.loopbackIPv4,
+    addressB: InternetAddress.loopbackIPv4,
+    portB: destination.port,
+    timeout: Duration(milliseconds: 200),
+    closeFlushTimeout: closeFlushTimeout,
+    transformAtoB: _slowTransform,
+  );
+  addTearDown(connector.close);
+  final peerA = await _Peer.connect(connector.sideAPort!);
+  final peer = await peerB.future.timeout(Duration(seconds: 5));
+  await _waitFor(() => connector.gracePeriodPassed, 'the grace period');
+
+  peerA.send(sent);
+  unawaited(peerA.socket.close());
+  await peer.ended.future.timeout(Duration(seconds: 30),
+      onTimeout: () => fail('the relay never closed side B'));
+  return (peer, connector);
+}
+
+/// Passes each chunk on 5 ms after the one before it, forwarding pauses but
+/// reading on while its output is queued.
+Stream<List<int>> _slowTransform(Stream<List<int>> source) {
+  late StreamSubscription<List<int>> subscription;
+  late final StreamController<List<int>> output;
+  Future<void> queue = Future<void>.value();
+  output = StreamController<List<int>>(
+    onListen: () {
+      subscription = source.listen((data) {
+        queue = queue.then((_) async {
+          await Future<void>.delayed(Duration(milliseconds: 5));
+          output.add(data);
+        });
+      }, onDone: () => queue.then((_) => output.close()));
+    },
+    onPause: () => subscription.pause(),
+    onResume: () => subscription.resume(),
+    onCancel: () => subscription.cancel(),
+  );
+  return output.stream;
 }
 
 /// A paired [Connection] on a loopback [SocketConnector.serverToServer], with
@@ -591,11 +947,14 @@ class _Relay {
   final Future<void> _endsDone;
 
   static Future<_Relay> start(
-      {Duration closeFlushTimeout = testCloseFlushTimeout}) async {
+      {Duration closeFlushTimeout = testCloseFlushTimeout,
+      Duration stalledFlushTimeout =
+          SocketConnector.defaultStalledFlushTimeout}) async {
     final connector = await SocketConnector.serverToServer(
       addressA: InternetAddress.loopbackIPv4,
       addressB: InternetAddress.loopbackIPv4,
       closeFlushTimeout: closeFlushTimeout,
+      stalledFlushTimeout: stalledFlushTimeout,
     );
     addTearDown(connector.close);
     final ends = <_End>[];
@@ -622,6 +981,11 @@ class _Relay {
   /// Whether [SocketConnector.connectionClosedStream] was done when
   /// [allEnds] returned.
   bool endsClosed = false;
+
+  /// Whether [SocketConnector.connectionClosedStream] is done within [within],
+  /// without closing the connector.
+  Future<bool> endsClosedWithin(Duration within) =>
+      _endsDone.then((_) => true).timeout(within, onTimeout: () => false);
 }
 
 /// A [Connection] as it was when [SocketConnector.connectionClosedStream]
@@ -677,6 +1041,15 @@ class _Peer {
   void stopReading() => _subscription.pause();
 
   void resumeReading() => _subscription.resume();
+
+  /// Reads for half of every 6 ms until the test ends.
+  void readInBursts() {
+    final Timer bursts = Timer.periodic(Duration(milliseconds: 6), (_) {
+      _subscription.pause();
+      Timer(Duration(milliseconds: 3), _subscription.resume);
+    });
+    addTearDown(bursts.cancel);
+  }
 
   /// Writes [count] zero bytes.
   void send(int count) {

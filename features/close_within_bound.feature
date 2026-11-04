@@ -7,12 +7,17 @@ Feature: A SocketConnector closes every side within a bound and reports each con
 
   @race      Both sides closing at once, close() racing a side's close, and 50
              connections closing in any order: each Connection reported once,
-             after both destroys, with final counts.
+             after both destroys, with final counts. A flush completing as the
+             timer fires leaves the connection open; a fired timer is never
+             undone.
   @replay    No messages cross a trust boundary here; the event is emitted at
              most once per Connection.
   @dos       A peer that stops reading, or resets while the relay's read of it
              is paused, cannot hold a side open past closeFlushTimeout. A
-             connectionClosedStream nobody listens to buffers nothing.
+             connectionClosedStream nobody listens to buffers nothing. A
+             stalled reader now pins its queued bytes for at most
+             stalledFlushTimeout plus closeFlushTimeout, rather than
+             indefinitely.
   @forgery / @impersonation  Consumers attribute an end by Connection identity,
              never by port, so one connection's end cannot be credited to
              another.
@@ -57,3 +62,21 @@ Feature: A SocketConnector closes every side within a bound and reports each con
     Given a SocketConnector whose connectionClosedStream has no listener
     When 1000 Connections open and close
     Then no close events are retained
+
+  Scenario: A relay flush that never completes closes its connection
+    Given a paired Connection whose peer B has stopped reading
+    And more than bufferHighWaterMark is queued toward side B
+    When the relay's flush toward side B has not completed after stalledFlushTimeout
+    Then both sides of the Connection are destroyed no later than closeFlushTimeout after that
+    And connectionClosedStream emits the Connection once
+
+  Scenario: A reader that keeps draining is not cut off
+    Given a paired Connection whose peer B reads slowly but steadily
+    And every relay flush toward side B completes within stalledFlushTimeout
+    When the Connection carries data for longer than stalledFlushTimeout
+    Then the Connection stays open
+
+  Scenario: A stalled flush closes only its own Connection
+    Given two paired Connections on one connector, and peer B of the first has stopped reading
+    When the first Connection's flush toward side B passes stalledFlushTimeout
+    Then the first Connection is destroyed and the second stays open
