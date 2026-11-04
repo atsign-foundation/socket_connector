@@ -28,8 +28,14 @@ import 'package:socket_connector/src/types.dart';
 /// - When [logTraffic] is true, socket traffic is logged to [logger].
 /// - [connectionStream] emits each new [Connection]; [done] completes when the
 ///   connector closes; [stats] accumulates per-session counters.
+/// - [connectionClosedStream] emits each [Connection] once both of its sides
+///   have been destroyed. No side waits longer than [closeFlushTimeout] for
+///   its pending data to be flushed before it is destroyed.
 class SocketConnector {
   static const defaultTimeout = Duration(seconds: 30);
+
+  /// The default for [closeFlushTimeout].
+  static const defaultCloseFlushTimeout = Duration(seconds: 30);
 
   /// Backpressure high-water mark, in bytes, per relay direction.
   ///
@@ -55,6 +61,29 @@ class SocketConnector {
   /// Emits each new [Connection] as it is established.
   Stream<Connection> get connectionStream => _csc.stream;
 
+  final StreamController<Connection> _closedConnections =
+      StreamController<Connection>.broadcast();
+
+  /// Emits each established [Connection] once, after both of its sides have
+  /// been destroyed.
+  ///
+  /// Closes once the connector is [closed] and every established
+  /// [Connection] has been emitted.
+  Stream<Connection> get connectionClosedStream => _closedConnections.stream;
+
+  /// Connections removed from [connections] whose end is not yet emitted on
+  /// [connectionClosedStream].
+  final Set<Connection> _endingConnections = {};
+
+  /// Measures every close deadline, unaffected by wall-clock changes.
+  final Stopwatch _clock = Stopwatch()..start();
+
+  /// Close deadlines, on [_clock], set for a side before its close begins.
+  final Map<Side, Duration> _closeDeadlines = {};
+
+  /// Timers that close a side at its deadline in [_closeDeadlines].
+  final Map<Side, Timer> _closeTimers = {};
+
   Timer? _timeoutTimer;
 
   SocketConnector({
@@ -63,6 +92,7 @@ class SocketConnector {
     this.timeout = defaultTimeout,
     this.authTimeout = defaultTimeout,
     this.keepAlive = SocketKeepAlive.defaults,
+    this.closeFlushTimeout = defaultCloseFlushTimeout,
     IOSink? logger,
   }) {
     this.logger = logger ?? stderr;
@@ -133,6 +163,13 @@ class SocketConnector {
   /// or creates. Defaults to [SocketKeepAlive.defaults].
   final SocketKeepAlive keepAlive;
 
+  /// The longest a side waits, once its close begins, for its pending data
+  /// to be flushed before its socket is destroyed regardless.
+  ///
+  /// A side whose far side has closed begins its own close then, even while
+  /// data for it is still on its way through the relay.
+  final Duration closeFlushTimeout;
+
   /// Brings [thisSide] under management: applies [keepAlive] to its socket,
   /// optionally authenticates it, and pairs it with a [Side] from the opposite
   /// side to form a [Connection].
@@ -156,9 +193,8 @@ class SocketConnector {
     // Side - whether from an inbound accept or an outbound connect - funnels
     // through here, so this is the single place keep-alive needs to be set.
     keepAlive.applyTo(thisSide.socket, onError: (m) => _log(m, force: true));
-    unawaited(thisSide.socket.done
-        .then((v) => _closeSide(thisSide))
-        .catchError((err) => _closeSide(thisSide)));
+    unawaited(thisSide.socket.done.then((_) => _closeSide(thisSide),
+        onError: (Object _) => _closeSide(thisSide, failed: true)));
     if (thisSide.socketAuthVerifier == null) {
       thisSide.authenticated = true;
     } else {
@@ -354,23 +390,29 @@ class SocketConnector {
     }
   }
 
-  /// How long [_flushBeforeDestroy] waits for another flush to clear before
-  /// tearing the socket down regardless.
+  /// The longest [_flushBeforeDestroy] waits for another flush to clear,
+  /// within the close's own deadline.
   static const Duration _boundSinkWait = Duration(seconds: 5);
 
-  /// Flushes [socket], waiting out any flush already in flight on it.
+  /// Flushes [socket], waiting out any flush already in flight on it, and
+  /// throws [TimeoutException] if that has not finished by [deadline] on
+  /// [_clock].
   ///
   /// NOTE: [Socket.flush] throws synchronously while the sink is bound, so a
   /// close landing during the relay's own flush has to retry. Destroying
   /// straight away instead would drop whatever is still queued.
-  static Future<void> _flushBeforeDestroy(Socket socket) async {
-    final DateTime deadline = DateTime.now().add(_boundSinkWait);
+  Future<void> _flushBeforeDestroy(Socket socket, Duration deadline) async {
+    final Duration boundDeadline = _clock.elapsed + _boundSinkWait;
     while (true) {
+      final Duration remaining = deadline - _clock.elapsed;
+      if (remaining <= Duration.zero) {
+        throw TimeoutException('flush did not finish', closeFlushTimeout);
+      }
       try {
-        await socket.flush();
+        await socket.flush().timeout(remaining);
         return;
       } on StateError catch (e) {
-        if (!_isSinkBound(e) || DateTime.now().isAfter(deadline)) {
+        if (!_isSinkBound(e) || _clock.elapsed > boundDeadline) {
           rethrow;
         }
         await Future<void>.delayed(const Duration(milliseconds: 1));
@@ -378,12 +420,20 @@ class SocketConnector {
     }
   }
 
+  /// Closes [side]: flushes its pending data, unless its socket has [failed],
+  /// destroys its socket, then closes its far side.
+  ///
+  /// Every step finishes by the side's close deadline: [closeFlushTimeout]
+  /// from now, or the earlier one [_closeFarSide] set for it.
   // ignore: strict_top_level_inference
-  _closeSide(final Side side) async {
+  _closeSide(final Side side, {bool failed = false}) async {
     if (side.state != SideState.open) {
       return;
     }
     side.state = SideState.closed;
+    _closeTimers.remove(side)?.cancel();
+    final Duration deadline =
+        _closeDeadlines.remove(side) ?? _clock.elapsed + closeFlushTimeout;
     pendingA.remove(side);
     pendingB.remove(side);
 
@@ -400,6 +450,7 @@ class SocketConnector {
     }
     if (connectionToRemove != null) {
       connections.remove(connectionToRemove);
+      _endingConnections.add(connectionToRemove);
       _log(chalk
           .brightBlue('Removed connection. ${connections.length} remaining.'));
       if (connections.isEmpty && gracePeriodPassed) {
@@ -411,28 +462,23 @@ class SocketConnector {
     }
 
     // NOTE: the flush gets its own try. A socket that is bound (the relay's
-    // own flush still in flight) or already broken throws here, and that must
-    // not cost this side its destroy() nor the far side its close.
-    try {
-      _log(chalk.brightBlue('Flushing socket on side ${side.name}'));
-      await _flushBeforeDestroy(side.socket);
-    } catch (err) {
-      _log('Flush on side ${side.name} before close failed: $err');
+    // own flush still in flight), already broken, or past its deadline throws
+    // here, and that must not cost this side its destroy() nor the far side
+    // its close.
+    if (!failed) {
+      try {
+        _log(chalk.brightBlue('Flushing socket on side ${side.name}'));
+        await _flushBeforeDestroy(side.socket, deadline);
+      } catch (err) {
+        _log('Flush on side ${side.name} before close failed: $err');
+      }
     }
 
     try {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
-      if (side.farSide != null && side.farSide!.state != SideState.closed) {
-        if (side.produced == side.farSide!.sent) {
-          _log(chalk.brightBlue(
-              'Far side (${side.farSide?.name}) has received all data - will close it'));
-          _closeSide(side.farSide!);
-        } else {
-          _log(chalk.brightBlue(
-              'Far side (${side.farSide?.name}) has NOT YET received all data'));
-        }
-      }
+      side.closedAt = DateTime.now().toUtc();
+      _closeFarSide(side);
     } catch (err) {
       _log('_closeSide encountered error $err');
     } finally {
@@ -443,10 +489,67 @@ class SocketConnector {
       // API exists for. destroy() is what actually stops delivery.
       side.chunkTransformer?.dispose();
     }
+    _emitIfEnded(side);
+  }
+
+  /// Begins the close of [side]'s far side, which [side] no longer feeds.
+  ///
+  /// A far side that has been handed everything [side] produced closes now.
+  /// Otherwise the relay write that hands it the last byte closes it, and a
+  /// timer closes it at its deadline regardless.
+  void _closeFarSide(Side side) {
+    final Side? far = side.farSide;
+    if (far == null || far.state != SideState.open) {
+      return;
+    }
+    if (side.produced == far.sent) {
+      _log(chalk.brightBlue(
+          'Far side (${far.name}) has received all data - will close it'));
+      _closeSide(far);
+      return;
+    }
+    _log(chalk
+        .brightBlue('Far side (${far.name}) has NOT YET received all data'));
+    _closeDeadlines[far] ??= _clock.elapsed + closeFlushTimeout;
+    _closeTimers[far] ??=
+        Timer(_closeDeadlines[far]! - _clock.elapsed, () => _closeSide(far));
+  }
+
+  /// Emits [side]'s [Connection] on [connectionClosedStream] once both of its
+  /// sides are destroyed.
+  void _emitIfEnded(Side side) {
+    Connection? ended;
+    for (final c in _endingConnections) {
+      if (c.sideA == side || c.sideB == side) {
+        ended = c;
+        break;
+      }
+    }
+    if (ended == null ||
+        ended.sideA.closedAt == null ||
+        ended.sideB.closedAt == null) {
+      return;
+    }
+    _endingConnections.remove(ended);
+    if (!_closedConnections.isClosed) {
+      _closedConnections.add(ended);
+    }
+    _closeEndedStreamIfDone();
+  }
+
+  /// Closes [connectionClosedStream] once the connector is closed and no
+  /// established [Connection] is left to emit.
+  void _closeEndedStreamIfDone() {
+    if (closed && connections.isEmpty && _endingConnections.isEmpty) {
+      _closedConnections.close();
+    }
   }
 
   /// Closes both server sockets (if any), closes every pending and established
   /// side, completes [done] and closes [connectionStream]. Idempotent.
+  ///
+  /// [connectionClosedStream] closes later, once every established
+  /// [Connection] has been emitted on it.
   void close() {
     _timeoutTimer?.cancel();
     _serverSocketA?.close();
@@ -477,6 +580,7 @@ class SocketConnector {
       _closeSide(c.sideA);
       _closeSide(c.sideB);
     }
+    _closeEndedStreamIfDone();
   }
 
   void _log(String s, {bool force = false}) {
@@ -499,6 +603,8 @@ class SocketConnector {
   /// - [backlog] is passed through to [ServerSocket.bind].
   /// - [timeout] is the grace period during which the connector waits for
   ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - [closeFlushTimeout] bounds how long each side's close waits for its
+  ///   pending data to be flushed; see [SocketConnector.closeFlushTimeout].
   /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
   ///   [logger] (defaults to stderr).
   static Future<SocketConnector> serverToServer({
@@ -516,6 +622,7 @@ class SocketConnector {
     Duration timeout = SocketConnector.defaultTimeout,
     Duration authTimeout = SocketConnector.defaultTimeout,
     SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
+    Duration closeFlushTimeout = SocketConnector.defaultCloseFlushTimeout,
     IOSink? logger,
     int backlog = 0,
   }) async {
@@ -529,6 +636,7 @@ class SocketConnector {
       timeout: timeout,
       authTimeout: authTimeout,
       keepAlive: keepAlive,
+      closeFlushTimeout: closeFlushTimeout,
       logger: logSink,
     );
     connector._serverSocketA = await ServerSocket.bind(
@@ -606,6 +714,8 @@ class SocketConnector {
   ///   defaults to [SocketKeepAlive.defaults].
   /// - [timeout] is the grace period during which the connector waits for
   ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - [closeFlushTimeout] bounds how long each side's close waits for its
+  ///   pending data to be flushed; see [SocketConnector.closeFlushTimeout].
   /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
   ///   [logger] (defaults to stderr).
   static Future<SocketConnector> socketToServer({
@@ -621,6 +731,7 @@ class SocketConnector {
     bool logTraffic = false,
     Duration timeout = SocketConnector.defaultTimeout,
     SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
+    Duration closeFlushTimeout = SocketConnector.defaultCloseFlushTimeout,
     IOSink? logger,
   }) async {
     IOSink logSink = logger ?? stderr;
@@ -631,6 +742,7 @@ class SocketConnector {
       logTraffic: logTraffic,
       timeout: timeout,
       keepAlive: keepAlive,
+      closeFlushTimeout: closeFlushTimeout,
       logger: logSink,
     );
 
@@ -663,11 +775,13 @@ class SocketConnector {
   /// - [keepAlive] sets TCP keep-alive on both created sockets; defaults to
   ///   [SocketKeepAlive.defaults].
   /// - Pass an existing [connector] to relay through it instead of creating a
-  ///   new one; when supplied, [verbose], [logTraffic], [timeout], [keepAlive]
-  ///   and [logger] are taken from that connector and the values passed here
-  ///   are ignored.
+  ///   new one; when supplied, [verbose], [logTraffic], [timeout], [keepAlive],
+  ///   [closeFlushTimeout] and [logger] are taken from that connector and the
+  ///   values passed here are ignored.
   /// - [timeout] is the grace period during which the connector waits for
   ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - [closeFlushTimeout] bounds how long each side's close waits for its
+  ///   pending data to be flushed; see [SocketConnector.closeFlushTimeout].
   /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
   ///   [logger] (defaults to stderr).
   static Future<SocketConnector> socketToSocket({
@@ -682,6 +796,7 @@ class SocketConnector {
     bool logTraffic = false,
     Duration timeout = SocketConnector.defaultTimeout,
     SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
+    Duration closeFlushTimeout = SocketConnector.defaultCloseFlushTimeout,
     IOSink? logger,
   }) async {
     IOSink logSink = logger ?? stderr;
@@ -690,6 +805,7 @@ class SocketConnector {
       logTraffic: logTraffic,
       timeout: timeout,
       keepAlive: keepAlive,
+      closeFlushTimeout: closeFlushTimeout,
       logger: logSink,
     );
 
@@ -749,6 +865,8 @@ class SocketConnector {
   ///   **after** the two sides are joined.
   /// - [timeout] is the grace period during which the connector waits for
   ///   connections before auto-closing; see [SocketConnector.timeout].
+  /// - [closeFlushTimeout] bounds how long each side's close waits for its
+  ///   pending data to be flushed; see [SocketConnector.closeFlushTimeout].
   /// - Set [verbose] to log activity and [logTraffic] to log relayed bytes, to
   ///   [logger] (defaults to stderr).
   static Future<SocketConnector> serverToSocket(
@@ -764,6 +882,7 @@ class SocketConnector {
       bool logTraffic = false,
       Duration timeout = SocketConnector.defaultTimeout,
       SocketKeepAlive keepAlive = SocketKeepAlive.defaults,
+      Duration closeFlushTimeout = SocketConnector.defaultCloseFlushTimeout,
       IOSink? logger,
       bool multi = false,
       @Deprecated("use beforeJoining instead")
@@ -778,6 +897,7 @@ class SocketConnector {
       logTraffic: logTraffic,
       timeout: timeout,
       keepAlive: keepAlive,
+      closeFlushTimeout: closeFlushTimeout,
       logger: logSink,
     );
 
@@ -979,19 +1099,16 @@ class _FlushGate {
     _flushWhenWritable();
   }
 
-  /// Flushes, retrying while some other flush holds the socket bound.
+  /// Flushes, retrying while some other flush holds the socket bound, and
+  /// reports a failed flush to [_onError] as a failed write.
   ///
   /// NOTE: `flush()` throws the bound-sink [StateError] synchronously, so it
-  /// belongs inside the guard for the same reason `add()` does. A destroyed
-  /// socket does not throw here; its buffered write surfaces the real error
-  /// on replay.
+  /// belongs inside the guard for the same reason `add()` does.
   void _flushWhenWritable() {
     try {
       _socket.flush().then(
             (_) => _replay(),
-            // Broken socket: replay anyway so a stashed chunk's write hits the
-            // real error path and closes the side.
-            onError: (Object _) => _replay(),
+            onError: (Object e, StackTrace st) => _fail(e, st),
           );
     } on StateError catch (e) {
       if (_isSinkBound(e)) {
@@ -1000,6 +1117,15 @@ class _FlushGate {
         _replay();
       }
     }
+  }
+
+  /// Drops the stash and reports [error]; the source stays paused.
+  ///
+  /// NOTE: nothing more is written to a socket whose flush has failed.
+  void _fail(Object error, StackTrace stackTrace) {
+    _stash = <List<int>>[];
+    _stashedBytes = 0;
+    _onError(error, stackTrace);
   }
 
   /// Writes the stash out and resumes the source, unless a replayed chunk has
