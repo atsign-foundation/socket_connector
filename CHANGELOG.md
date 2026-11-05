@@ -2,6 +2,9 @@
 
 - feat: `connectionClosedStream` emits each `Connection` once both of its
   sides have been destroyed; `Side.closedAt` records when each side was.
+- feat: `connectionClosedStream` closes once every socket the connector
+  handled has been destroyed, up to `closeFlushTimeout` after `done`
+  completes.
 - feat: a connection whose peer stops reading is closed after
   `stalledFlushTimeout` (default 2 minutes), however little data is queued
   for that peer.

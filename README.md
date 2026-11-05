@@ -49,8 +49,9 @@ Other capabilities:
   and the remote addresses seen during the session.
 - **Lifecycle** — `connector.connectionStream` emits each new `Connection`,
   `connector.connectionClosedStream` emits it again once both of its sides
-  have been destroyed, and `connector.done` completes when the connector
-  closes. See
+  have been destroyed and closes once every socket has been, and
+  `connector.done` completes when the connector closes, up to
+  `closeFlushTimeout` before every socket is destroyed. See
   [`example/wait_for_connector_done_example.dart`](example/wait_for_connector_done_example.dart).
 - **Bounded close** — no side waits longer than `closeFlushTimeout` (default
   30 seconds) for its pending data to be flushed before it is destroyed, even

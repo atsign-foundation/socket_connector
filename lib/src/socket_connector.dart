@@ -74,13 +74,17 @@ class SocketConnector {
   /// Emits each established [Connection] once, after both of its sides have
   /// been destroyed.
   ///
-  /// Closes once the connector is [closed] and every established
-  /// [Connection] has been emitted.
+  /// Closes once the connector is [closed] and the socket of every side it
+  /// has handled has been destroyed.
   Stream<Connection> get connectionClosedStream => _closedConnections.stream;
 
   /// Connections removed from [connections] whose end is not yet emitted on
   /// [connectionClosedStream].
   final Set<Connection> _endingConnections = {};
+
+  /// Every side handed to [handleSingleConnection] whose socket is not yet
+  /// destroyed.
+  final Set<Side> _sides = {};
 
   /// Measures every close deadline, unaffected by wall-clock changes.
   final Stopwatch _clock = Stopwatch()..start();
@@ -158,6 +162,10 @@ class SocketConnector {
   /// 2. the last established [Connection] closes after the grace period has
   ///    elapsed (see [gracePeriodPassed]), or
   /// 3. [close] is called explicitly.
+  ///
+  /// A side's socket can still be open when [done] completes, for up to
+  /// [closeFlushTimeout] while its pending data is flushed;
+  /// [connectionClosedStream] closes once every socket has been destroyed.
   Future get done => _closedCompleter.future;
 
   /// Whether this SocketConnector is closed or not
@@ -222,6 +230,7 @@ class SocketConnector {
       thisSide.socket.destroy();
       throw StateError('Connector is closed');
     }
+    _sides.add(thisSide);
     // Apply TCP keep-alive to every socket as it is accepted or created. Every
     // Side - whether from an inbound accept or an outbound connect - funnels
     // through here, so this is the single place keep-alive needs to be set.
@@ -534,6 +543,7 @@ class SocketConnector {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
       side.closedAt = DateTime.now().toUtc();
+      _sides.remove(side);
       _gates.remove(side)?._stop();
       _closeFarSide(side);
     } catch (err) {
@@ -547,6 +557,7 @@ class SocketConnector {
       side.chunkTransformer?.dispose();
     }
     _emitIfEnded(side);
+    _closeEndedStreamIfDone();
   }
 
   /// Begins the close of [side]'s far side, which [side] no longer feeds.
@@ -594,13 +605,12 @@ class SocketConnector {
     if (!_closedConnections.isClosed) {
       _closedConnections.add(ended);
     }
-    _closeEndedStreamIfDone();
   }
 
-  /// Closes [connectionClosedStream] once the connector is closed and no
-  /// established [Connection] is left to emit.
+  /// Closes [connectionClosedStream] once the connector is closed and every
+  /// side's socket has been destroyed.
   void _closeEndedStreamIfDone() {
-    if (closed && connections.isEmpty && _endingConnections.isEmpty) {
+    if (closed && _sides.isEmpty) {
       _closedConnections.close();
     }
   }
@@ -610,8 +620,10 @@ class SocketConnector {
   /// connection already ending, completes [done] and closes
   /// [connectionStream]. Idempotent.
   ///
-  /// [connectionClosedStream] closes later, once every established
-  /// [Connection] has been emitted on it.
+  /// Returns without waiting for the sides: each side's socket is destroyed
+  /// once its pending data is flushed, and within [closeFlushTimeout].
+  /// [connectionClosedStream] closes once every side's socket has been
+  /// destroyed.
   void close() => _close(closeEnding: true);
 
   /// Closes the connector as [close] does, closing the open side of a
