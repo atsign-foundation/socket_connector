@@ -56,7 +56,8 @@ Other capabilities:
   30 seconds) for its pending data to be flushed before it is destroyed, even
   when its peer has stopped reading, and a relay flush toward a side that has
   not completed within `stalledFlushTimeout` (default 2 minutes) closes its
-  connection.
+  connection. A relay flush begins once `bufferHighWaterMark` bytes have been
+  written toward a side, or one second after the first of them.
 
 ## Getting started
 

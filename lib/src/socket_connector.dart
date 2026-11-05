@@ -32,7 +32,9 @@ import 'package:socket_connector/src/types.dart';
 ///   have been destroyed. No side waits longer than [closeFlushTimeout] for
 ///   its pending data to be flushed before it is destroyed.
 /// - A relay flush toward a side that has not completed within
-///   [stalledFlushTimeout] closes its [Connection].
+///   [stalledFlushTimeout] closes its [Connection]. A relay flush begins once
+///   [bufferHighWaterMark] bytes have been written toward a side since its
+///   last flush, or one second after the first of them.
 class SocketConnector {
   static const defaultTimeout = Duration(seconds: 30);
 
@@ -193,8 +195,9 @@ class SocketConnector {
   /// The longest a relay flush toward a side may take; a flush that has not
   /// completed by then closes its [Connection].
   ///
-  /// A relay flush begins each time [bufferHighWaterMark] bytes have been
-  /// written toward a side. Zero or a negative value is refused.
+  /// A relay flush begins once [bufferHighWaterMark] bytes have been written
+  /// toward a side since its last flush, or one second after the first of
+  /// them. Zero or a negative value is refused.
   final Duration stalledFlushTimeout;
 
   /// Brings [thisSide] under management: applies [keepAlive] to its socket,
@@ -531,7 +534,7 @@ class SocketConnector {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
       side.closedAt = DateTime.now().toUtc();
-      _gates.remove(side)?._cancelStallTimer();
+      _gates.remove(side)?._stop();
       _closeFarSide(side);
     } catch (err) {
       _log('_closeSide encountered error $err');
@@ -1080,6 +1083,11 @@ bool _isSinkBound(Object e) =>
 /// socket's own buffer, which nothing reuses.
 bool _neverCopy() => false;
 
+/// How long after the first byte written toward a side since its last flush
+/// a relay flush begins, if [SocketConnector.bufferHighWaterMark] has not
+/// begun one sooner.
+const Duration _flushDelay = Duration(seconds: 1);
+
 /// Serialises writes to a socket against any [Socket.flush] on that socket.
 ///
 /// `Socket.flush()` binds the sink for the duration of the flush, so any
@@ -1087,10 +1095,12 @@ bool _neverCopy() => false;
 /// `Bad state: StreamSink is bound to a stream`. Two flushes can hold the
 /// socket bound:
 ///
-/// 1. This gate's own high-water flush. Pausing the source is not enough to
-///    keep an `add()` off the socket during it: a socket delivers buffered
-///    data through microtask replay, and a `pause()` issued from inside that
-///    replay does not reliably suppress the straggler already scheduled.
+/// 1. This gate's own flush, begun at the high-water mark or [_flushDelay]
+///    after the first write since the last flush. Pausing the source is not
+///    enough to keep an `add()` off the socket during it: a socket delivers
+///    buffered data through microtask replay, and a `pause()` issued from
+///    inside that replay does not reliably suppress the straggler already
+///    scheduled.
 /// 2. A flush from elsewhere — notably the close path's `flush()` on a socket
 ///    that this gate is still writing to from the far side.
 ///
@@ -1133,6 +1143,12 @@ class _FlushGate {
   final Duration _stallTimeout;
   final void Function() _onStall;
   Timer? _stallTimer;
+
+  /// Begins a flush [_flushDelay] after the first write since the last one.
+  Timer? _delayTimer;
+
+  /// Whether the socket has been destroyed, after which no flush is delayed.
+  bool _stopped = false;
 
   /// Whether [add] must copy before writing, asked on every write because a
   /// [ChunkTransformer] can be installed after this gate is built. See [add].
@@ -1190,12 +1206,15 @@ class _FlushGate {
     _unflushed += data.length;
     if (_unflushed >= SocketConnector.bufferHighWaterMark) {
       _beginFlush();
+    } else if (!_stopped) {
+      _delayTimer ??= Timer(_flushDelay, _beginFlush);
     }
   }
 
   /// Pauses the source and flushes, replaying the stash when the flush
   /// settles.
   void _beginFlush() {
+    _cancelDelayTimer();
     _flushing = true;
     _pauseSource();
     _stallTimer ??= Timer(_stallTimeout, () {
@@ -1209,6 +1228,18 @@ class _FlushGate {
   void _cancelStallTimer() {
     _stallTimer?.cancel();
     _stallTimer = null;
+  }
+
+  void _cancelDelayTimer() {
+    _delayTimer?.cancel();
+    _delayTimer = null;
+  }
+
+  /// Cancels this gate's timers once its socket has been destroyed.
+  void _stop() {
+    _stopped = true;
+    _cancelDelayTimer();
+    _cancelStallTimer();
   }
 
   /// Flushes, retrying while some other flush holds the socket bound, and

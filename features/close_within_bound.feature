@@ -18,10 +18,10 @@ Feature: A SocketConnector closes every side within a bound and reports each con
              most once per Connection.
   @dos       A peer that stops reading, or resets while the relay's read of it
              is paused, cannot hold a side open past closeFlushTimeout. A
-             connectionClosedStream nobody listens to buffers nothing. A
-             stalled reader now pins its queued bytes for at most
-             stalledFlushTimeout plus closeFlushTimeout, rather than
-             indefinitely.
+             connectionClosedStream nobody listens to buffers nothing. A peer
+             that stops reading holds its queued bytes for at most the flush
+             delay plus stalledFlushTimeout plus closeFlushTimeout, however
+             few they are.
   @forgery / @impersonation  Consumers attribute an end by Connection identity,
              never by port, so one connection's end cannot be credited to
              another.

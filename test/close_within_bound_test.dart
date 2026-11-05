@@ -400,6 +400,52 @@ void main() {
           reason: 'every side is destroyed no later than closeFlushTimeout'
               ' after close() began');
     });
+
+    test(
+        'when the other peer is still sending, without leaving a flush delay'
+        ' timer running', () async {
+      const Duration closeFlushTimeout = Duration(milliseconds: 2500);
+      final timers = <Timer>[];
+      bool tracking = false;
+      int? activeAtEnd;
+      late _Relay relay;
+      late int sentToSideBAtDestroy;
+      await runZoned(() async {
+        relay = await _Relay.start(closeFlushTimeout: closeFlushTimeout);
+        relay.connector.connectionClosedStream.listen(
+            (_) => activeAtEnd = timers.where((t) => t.isActive).length);
+        _setBufferSizes(relay.peerA.socket, relay.connection.sideA.socket);
+        relay.peerA.stopReading();
+        relay.peerB.send(2 * 1024 * 1024);
+        await _waitFor(() => relay.connection.sideA.sent == relay.peerB.sent,
+            'side A to be handed everything peer B sent');
+        final Timer sending = Timer.periodic(
+            Duration(milliseconds: 5), (_) => relay.peerA.send(1024));
+        addTearDown(sending.cancel);
+        await _waitFor(() => relay.connection.sideB.sent > 0,
+            'side B to be handed data from peer A');
+
+        tracking = true;
+        relay.connector.close();
+        await _waitFor(() => relay.connection.sideB.closedAt != null,
+            'side B to be destroyed');
+        sentToSideBAtDestroy = relay.connection.sideB.sent;
+        await _waitFor(() => activeAtEnd != null, 'the connection\'s end',
+            within: closeFlushTimeout + slack);
+        sending.cancel();
+      }, zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+        final Timer timer = parent.createTimer(zone, duration, callback);
+        if (tracking && duration == flushDelay) {
+          timers.add(timer);
+        }
+        return timer;
+      }));
+      expect(relay.connection.sideB.sent, greaterThan(sentToSideBAtDestroy),
+          reason: 'peer A\'s data still reaches side B after its destroy');
+      expect(activeAtEnd, 0,
+          reason: 'no flush delay timer outlives the connection');
+    });
   });
 
   group('close() frees a side whose flush cannot finish', () {

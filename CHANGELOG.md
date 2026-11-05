@@ -2,8 +2,9 @@
 
 - feat: `connectionClosedStream` emits each `Connection` once both of its
   sides have been destroyed; `Side.closedAt` records when each side was.
-- feat: a connection whose relay flush toward one side has not completed
-  within `stalledFlushTimeout` (default 2 minutes) is closed.
+- feat: a connection whose peer stops reading is closed after
+  `stalledFlushTimeout` (default 2 minutes), however little data is queued
+  for that peer.
 - fix: a closing side is destroyed within `closeFlushTimeout` (default 30
   seconds), even when its peer stops reading or resets, including every side
   that `close()` closes.
