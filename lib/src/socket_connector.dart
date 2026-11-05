@@ -1271,6 +1271,7 @@ class _FlushGate {
   ///
   /// NOTE: nothing more is written to a socket whose flush has failed.
   void _fail(Object error, StackTrace stackTrace) {
+    _cancelStallTimer();
     _stash = <List<int>>[];
     _stashedBytes = 0;
     _onError(error, stackTrace);
