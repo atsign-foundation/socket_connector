@@ -1627,10 +1627,9 @@ void _ignoreSinkErrors(Socket socket) {
 /// Shrinks [receiver]'s receive buffer and [sender]'s send buffer to 16 KiB.
 void _setBufferSizes(Socket receiver, Socket sender) {
   final int level = Platform.isMacOS ? 0xffff : 1;
-  final int sendBuffer = Platform.isMacOS ? 0x1001 : 7;
   final int receiveBuffer = Platform.isMacOS ? 0x1002 : 8;
   receiver.setRawOption(RawSocketOption.fromInt(level, receiveBuffer, 16384));
-  sender.setRawOption(RawSocketOption.fromInt(level, sendBuffer, 16384));
+  _setSendBuffer(sender);
 }
 
 /// Shrinks [sender]'s send buffer to 16 KiB.
