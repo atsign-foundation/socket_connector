@@ -5,9 +5,9 @@
 - feat: `connectionClosedStream` closes once every socket the connector
   handled has been destroyed, up to `closeFlushTimeout` after `done`
   completes.
-- feat: a connection whose peer stops reading is closed after
-  `stalledFlushTimeout` (default 2 minutes), however little data is queued
-  for that peer.
+- feat: a connection whose peer stops reading starts closing no later than
+  one second plus `stalledFlushTimeout` (default 2 minutes) after data first
+  waits for that peer, however little is queued.
 - fix: a closing side is destroyed within `closeFlushTimeout` (default 30
   seconds), even when its peer stops reading or resets, including every side
   that `close()` closes.
