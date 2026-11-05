@@ -1,3 +1,21 @@
+## 2.7.0
+
+- feat: `connectionClosedStream` emits each `Connection` once both of its
+  sides have been destroyed; `Side.closedAt` records when each side was.
+- feat: `connectionClosedStream` closes once every socket the connector
+  handled has been destroyed, up to `closeFlushTimeout` after `done`
+  completes.
+- feat: a connection whose peer stops reading starts closing no later than
+  one second plus `stalledFlushTimeout` (default 2 minutes) after data first
+  waits for that peer, however little is queued.
+- fix: a closing side is destroyed within `closeFlushTimeout` (default 30
+  seconds), even when its peer stops reading or resets, including every side
+  that `close()` closes.
+- fix: `close()` also destroys a side that is still authenticating, and a side
+  B that `serverToSocket` connects while `close()` runs.
+- fix: `handleSingleConnection()` on a closed connector destroys the side's
+  socket before it throws `StateError`.
+
 ## 2.6.1
 
 - fix: `close()` now closes established connections too, as documented;

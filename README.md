@@ -47,9 +47,18 @@ Other capabilities:
   to rewrite the byte stream in flight (compression, framing, etc.).
 - **Stats** — `connector.stats` reports sockets created, bytes relayed each way,
   and the remote addresses seen during the session.
-- **Lifecycle** — `connector.connectionStream` emits each new `Connection`, and
-  `connector.done` completes when the connector closes. See
+- **Lifecycle** — `connector.connectionStream` emits each new `Connection`,
+  `connector.connectionClosedStream` emits it again once both of its sides
+  have been destroyed and closes once every socket has been, and
+  `connector.done` completes when the connector closes, up to
+  `closeFlushTimeout` before every socket is destroyed. See
   [`example/wait_for_connector_done_example.dart`](example/wait_for_connector_done_example.dart).
+- **Bounded close** — no side waits longer than `closeFlushTimeout` (default
+  30 seconds) for its pending data to be flushed before it is destroyed, even
+  when its peer has stopped reading, and a relay flush toward a side that has
+  not completed within `stalledFlushTimeout` (default 2 minutes) closes its
+  connection. A relay flush begins once `bufferHighWaterMark` bytes have been
+  written toward a side, or one second after the first of them.
 
 ## Getting started
 
