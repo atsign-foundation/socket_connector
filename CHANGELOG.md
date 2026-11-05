@@ -13,6 +13,8 @@
   that `close()` closes.
 - fix: `close()` also destroys a side that is still authenticating, and a side
   B that `serverToSocket` connects while `close()` runs.
+- fix: `handleSingleConnection()` on a closed connector destroys the side's
+  socket before it throws `StateError`.
 
 ## 2.6.1
 
