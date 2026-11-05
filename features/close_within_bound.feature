@@ -4,12 +4,16 @@ Feature: A SocketConnector closes every side within a bound and reports each con
   No side waits longer than closeFlushTimeout (default 30 s) for its pending
   data to be flushed before it is destroyed, so a peer that stops reading
   cannot keep a socket open, and close() frees every side within that bound.
+  A relay flush toward a side begins once bufferHighWaterMark bytes have been
+  written toward it since its last flush, or the flush delay (1 second) after
+  the first of them.
 
   @race      Both sides closing at once, close() racing a side's close, and 50
              connections closing in any order: each Connection reported once,
              after both destroys, with final counts. A flush completing as the
              timer fires leaves the connection open; a fired timer is never
-             undone.
+             undone. close() racing a flush the flush delay began frees every
+             side within the bound.
   @replay    No messages cross a trust boundary here; the event is emitted at
              most once per Connection.
   @dos       A peer that stops reading, or resets while the relay's read of it
@@ -80,3 +84,72 @@ Feature: A SocketConnector closes every side within a bound and reports each con
     Given two paired Connections on one connector, and peer B of the first has stopped reading
     When the first Connection's flush toward side B passes stalledFlushTimeout
     Then the first Connection is destroyed and the second stays open
+
+  Scenario: A peer that stops reading with less than bufferHighWaterMark queued is closed
+    Given a paired Connection whose peer B has stopped reading
+    When peer A sends less than bufferHighWaterMark and then nothing more
+    Then both sides are destroyed no later than the flush delay plus stalledFlushTimeout plus closeFlushTimeout after the last byte reached side B
+    And connectionClosedStream emits the Connection once
+
+  Scenario: A sender that trickles cannot hold queued bytes open
+    Given a paired Connection whose peer B has stopped reading
+    And less than bufferHighWaterMark is queued toward side B
+    When peer A sends one byte every half of the flush delay
+    Then both sides are destroyed no later than the flush delay plus stalledFlushTimeout plus closeFlushTimeout after the first queued byte reached side B
+
+  Scenario: An idle connection with nothing queued stays open
+    Given a paired Connection whose peers have each read everything sent to them
+    When neither peer sends anything for longer than the flush delay plus stalledFlushTimeout plus closeFlushTimeout
+    Then the Connection stays open
+    And the connector has no timer running for it
+
+  Scenario: A slow reader below bufferHighWaterMark is not cut off
+    Given a paired Connection whose peer B reads slowly but steadily
+    And every relay flush toward side B completes within stalledFlushTimeout
+    When peer A sends less than bufferHighWaterMark in each flush delay, for longer than stalledFlushTimeout
+    Then the Connection stays open
+
+  @race
+  Scenario: close() during a flush begun by the flush delay frees every side within the bound
+    Given a paired Connection whose peer B has stopped reading
+    And a relay flush toward side B that the flush delay began
+    When connector.close() is called
+    Then every side is destroyed no later than closeFlushTimeout after close() began
+    And no timer the connector started for the Connection is active when connectionClosedStream emits it
+
+  Scenario: connectionClosedStream closes only once every side's socket is destroyed
+    Given a side still authenticating whose pending data cannot be flushed
+    When connector.close() is called
+    Then connectionClosedStream closes no earlier than that side's socket is destroyed
+    And no later than closeFlushTimeout after close() began
+
+  Scenario: close() logs nothing for a side it closed while authenticating
+    Given a SocketConnector with verbose false and a side whose authentication has not ended
+    And connector.close() has been called
+    When that side's authentication times out
+    Then nothing is written to the logger
+
+  Scenario: An authentication that fails on an open connector is still logged
+    Given a SocketConnector with verbose false
+    When a side's authentication fails
+    Then "Authentication failed on side A" is written to the logger
+
+  Scenario: A side B connected while close() runs is destroyed without an error line
+    Given a serverToSocket connector with verbose false whose beforeJoining is still running
+    And connector.close() has been called
+    When beforeJoining returns
+    Then side B's socket is destroyed
+    And nothing is written to the logger
+
+  Scenario: close() of a serverToServer connector writes nothing when verbose is false
+    Given a serverToServer connector with verbose false
+    When connector.close() is called
+    Then nothing is written to the logger
+
+  Scenario: A side whose socket fails to destroy is still reported, and its far side still closes
+    Given a paired Connection whose side A socket throws from destroy()
+    When peer A closes
+    Then side A's closedAt is set
+    And side B is destroyed no later than closeFlushTimeout after side A's close began
+    And connectionClosedStream emits the Connection once
+    And the failure is written to the logger
