@@ -1153,7 +1153,7 @@ class _FlushGate {
   /// Begins a flush [_flushDelay] after the first write since the last one.
   Timer? _delayTimer;
 
-  /// Whether the socket has been destroyed, after which no flush is delayed.
+  /// Whether the socket has been destroyed, after which nothing is written.
   bool _stopped = false;
 
   /// Whether [add] must copy before writing, asked on every write because a
@@ -1167,7 +1167,8 @@ class _FlushGate {
   List<List<int>> _stash = <List<int>>[];
 
   /// Writes [data], or stashes it if a flush is in flight or the socket is
-  /// bound by someone else's flush.
+  /// bound by someone else's flush. Drops it once the socket has been
+  /// destroyed.
   ///
   /// [ChunkTransformer.transform] is allowed to return a view over memory it
   /// reuses on its next call (see that contract's doc comment) and neither
@@ -1185,6 +1186,9 @@ class _FlushGate {
   /// [_copyBeforeWrite] returns true. The two branches are mutually
   /// exclusive, so no chunk is copied twice.
   void add(List<int> data) {
+    if (_stopped) {
+      return;
+    }
     if (_flushing) {
       _stash.add(List<int>.of(data));
       _stashedBytes += data.length;
@@ -1212,7 +1216,7 @@ class _FlushGate {
     _unflushed += data.length;
     if (_unflushed >= SocketConnector.bufferHighWaterMark) {
       _beginFlush();
-    } else if (!_stopped) {
+    } else {
       _delayTimer ??= Timer(_flushDelay, _beginFlush);
     }
   }
@@ -1241,7 +1245,8 @@ class _FlushGate {
     _delayTimer = null;
   }
 
-  /// Cancels this gate's timers once its socket has been destroyed.
+  /// Cancels this gate's timers and stops its writes once its socket has been
+  /// destroyed.
   void _stop() {
     _stopped = true;
     _cancelDelayTimer();

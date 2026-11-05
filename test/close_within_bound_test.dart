@@ -402,16 +402,18 @@ void main() {
     });
 
     test(
-        'when the other peer is still sending, without leaving a flush delay'
-        ' timer running', () async {
+        'when the other peer is still sending, without leaving a flush timer'
+        ' running', () async {
       const Duration closeFlushTimeout = Duration(milliseconds: 2500);
+      const Duration stall = Duration(seconds: 7);
       final timers = <Timer>[];
       bool tracking = false;
       int? activeAtEnd;
       late _Relay relay;
-      late int sentToSideBAtDestroy;
+      late int rcvdFromAAtDestroy;
       await runZoned(() async {
-        relay = await _Relay.start(closeFlushTimeout: closeFlushTimeout);
+        relay = await _Relay.start(
+            closeFlushTimeout: closeFlushTimeout, stalledFlushTimeout: stall);
         relay.connector.connectionClosedStream.listen(
             (_) => activeAtEnd = timers.where((t) => t.isActive).length);
         _setBufferSizes(relay.peerA.socket, relay.connection.sideA.socket);
@@ -429,22 +431,22 @@ void main() {
         relay.connector.close();
         await _waitFor(() => relay.connection.sideB.closedAt != null,
             'side B to be destroyed');
-        sentToSideBAtDestroy = relay.connection.sideB.sent;
+        rcvdFromAAtDestroy = relay.connection.sideA.rcvd;
         await _waitFor(() => activeAtEnd != null, 'the connection\'s end',
             within: closeFlushTimeout + slack);
         sending.cancel();
       }, zoneSpecification: ZoneSpecification(
           createTimer: (self, parent, zone, duration, callback) {
         final Timer timer = parent.createTimer(zone, duration, callback);
-        if (tracking && duration == flushDelay) {
+        if (tracking && (duration == flushDelay || duration == stall)) {
           timers.add(timer);
         }
         return timer;
       }));
-      expect(relay.connection.sideB.sent, greaterThan(sentToSideBAtDestroy),
-          reason: 'peer A\'s data still reaches side B after its destroy');
+      expect(relay.connection.sideA.rcvd, greaterThan(rcvdFromAAtDestroy),
+          reason: 'the relay still reads peer A after side B is destroyed');
       expect(activeAtEnd, 0,
-          reason: 'no flush delay timer outlives the connection');
+          reason: 'no flush timer outlives the connection');
     });
   });
 
