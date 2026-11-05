@@ -542,13 +542,13 @@ class SocketConnector {
     try {
       _log(chalk.brightBlue('Destroying socket on side ${side.name}'));
       side.socket.destroy();
+    } catch (err) {
+      _log('Destroying the socket on side ${side.name} failed: $err',
+          force: true);
+    } finally {
       side.closedAt = DateTime.now().toUtc();
       _sides.remove(side);
       _gates.remove(side)?._stop();
-      _closeFarSide(side);
-    } catch (err) {
-      _log('_closeSide encountered error $err');
-    } finally {
       // NOTE: disposed only once the socket is destroyed, never before the
       // flush above. Nothing cancels this side's source subscription, so
       // until destroy() it can still deliver a chunk — and transform() on a
@@ -556,6 +556,7 @@ class SocketConnector {
       // API exists for. destroy() is what actually stops delivery.
       side.chunkTransformer?.dispose();
     }
+    _closeFarSide(side);
     _emitIfEnded(side);
     _closeEndedStreamIfDone();
   }

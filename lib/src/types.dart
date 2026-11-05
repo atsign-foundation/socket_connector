@@ -127,7 +127,8 @@ class Side {
   /// those two directly is never true for a length-changing transform.
   int produced = 0;
 
-  /// When this side's socket was destroyed, in UTC; null until then.
+  /// When the connector finished closing this side's socket, in UTC; null
+  /// until then.
   DateTime? closedAt;
 
   String get name => isSideA ? 'A' : 'B';
