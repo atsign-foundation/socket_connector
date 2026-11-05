@@ -679,13 +679,19 @@ class SocketConnector {
   }
 
   /// Hands [side] to [handleSingleConnection], writing what it throws to
-  /// [logSink]; that the connector has closed is written only when [verbose].
+  /// [logSink]. A side that arrives once the connector has closed is
+  /// destroyed instead, and written to [logSink] only when [verbose].
   void _join(Side side, IOSink logSink) {
-    unawaited(handleSingleConnection(side).catchError((Object err) {
-      if (verbose || !(closed && err is StateError)) {
-        logSink.writeln(
-            'ERROR $err from handleSingleConnection on side${side.name} $side');
+    if (closed) {
+      side.socket.destroy();
+      if (verbose) {
+        logSink.writeln('Connector is closed: destroyed side${side.name}');
       }
+      return;
+    }
+    unawaited(handleSingleConnection(side).catchError((Object err) {
+      logSink.writeln(
+          'ERROR $err from handleSingleConnection on side${side.name} $side');
     }));
   }
 
